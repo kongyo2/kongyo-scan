@@ -10,6 +10,7 @@ import { setProviderKey, type StoredKeys } from "../config/credentials.js";
 import { CUSTOM_PRESET_ID, findPreset, PROVIDER_PRESETS } from "../config/presets.js";
 import {
   type Config,
+  DEFAULT_REASONING_EFFORT,
   ENV_NAME_PATTERN,
   type ProviderConfig,
   PROVIDER_NAME_PATTERN,
@@ -88,6 +89,8 @@ function hostName(baseUrl: string): string {
 
 /** Step-by-step setup of one provider: endpoint, key, model, a live check, then a review before saving. */
 export function ProviderWizard(props: ProviderWizardProps): ReactNode {
+  // The test request carries the effort a scan would send, so a rejected value shows up here.
+  const scanEffort = props.config.reasoning_effort ?? DEFAULT_REASONING_EFFORT;
   const presetRows = useListRows(12, 9);
   const modelRows = useListRows(10, 10);
   const [step, setStep] = useState<Step>("preset");
@@ -194,7 +197,7 @@ export function ProviderWizard(props: ProviderWizardProps): ReactNode {
           provider,
           props.env,
           props.signal,
-          props.config.reasoning_effort,
+          scanEffort,
           candidateKeys(provider),
         );
         if (!active) return;
@@ -604,6 +607,18 @@ export function ProviderWizard(props: ProviderWizardProps): ReactNode {
               )}
             </Row>
           </Box>
+          {check?.failure?.kind === "bad_request" ? (
+            <Box marginBottom={1} flexDirection="column">
+              <Text>
+                <Tint tone="warning">! </Tint>
+                {`The endpoint rejected the test request. If it does not accept effort ${scanEffort}, add it anyway and set its own:`}
+              </Text>
+              <Text>
+                {"    "}
+                <Tint tone="command">{`${BIN} providers update ${provider.name} --effort <VALUE>`}</Tint>
+              </Text>
+            </Box>
+          ) : null}
           {check?.ok && !check.toolCall ? (
             <Box marginBottom={1}>
               <Tint tone="warning">! </Tint>

@@ -20,6 +20,7 @@ import { maskSecret } from "../config/keys.js";
 import { CUSTOM_PRESET_ID, findPreset, PROVIDER_PRESETS } from "../config/presets.js";
 import {
   type Config,
+  DEFAULT_REASONING_EFFORT,
   type ProviderConfig,
   PROVIDER_NAME_PATTERN,
   WIRE_APIS,
@@ -196,7 +197,14 @@ function describeCheck(result: CheckResult): string {
   return `ok in ${formatDuration(result.latencyMs)}${result.toolCall ? " (tool calling works)" : " (answered, but did not call the probe tool)"}`;
 }
 
-function checkFailedError(name: string, result: CheckResult): CliError {
+/** What to try when an endpoint turned the test request down, which is usually about the effort value. */
+function rejectionHint(effort: string | undefined): string {
+  return effort === undefined
+    ? "The endpoint rejected the test request."
+    : `The endpoint rejected the test request. If it does not accept reasoning effort ${effort}, pass --effort with a value it accepts, or --effort default to send none.`;
+}
+
+function checkFailedError(name: string, result: CheckResult, effort: string | undefined): CliError {
   const failure = result.failure;
   const errorClass =
     failure?.kind === "auth"
@@ -214,7 +222,10 @@ function checkFailedError(name: string, result: CheckResult): CliError {
           : failure?.kind === "network" || failure?.kind === "timeout"
             ? "network_error"
             : "provider_error",
-      hint: "Nothing was saved. Fix the endpoint, model, or key, or pass --no-check to save it anyway.",
+      hint:
+        failure?.kind === "bad_request"
+          ? `Nothing was saved. ${rejectionHint(effort)}`
+          : "Nothing was saved. Fix the endpoint, model, or key, or pass --no-check to save it anyway.",
       data: { failure },
     },
   );
@@ -418,16 +429,14 @@ async function addProvider(context: AppContext, args: ParsedArgs): Promise<numbe
   let check: CheckResult | undefined;
   if (booleanOption(args, "check") !== false) {
     if (!terminal.json) output.info(`  Checking ${provider.name}${output.err.glyph.ellipsis}`);
-    const verified = await verifyProvider(
-      provider,
-      env,
-      context.signal,
-      existing.reasoning_effort,
-      keys,
-    );
+    // Test with the effort a scan would send, so a rejected value shows up now, not mid-scan.
+    const effort = existing.reasoning_effort ?? DEFAULT_REASONING_EFFORT;
+    const verified = await verifyProvider(provider, env, context.signal, effort, keys);
     provider = verified.provider;
     check = verified.result;
-    if (!check.ok) throw checkFailedError(provider.name, check);
+    if (!check.ok) {
+      throw checkFailedError(provider.name, check, provider.reasoning_effort ?? effort);
+    }
     if (!check.toolCall) {
       output.warn(
         "tool_calls_unverified",
@@ -715,7 +724,8 @@ async function checkProviders(context: AppContext, args: ParsedArgs): Promise<nu
     }
     return 0;
   }
-  const effort = stringOption(args, "effort") ?? config.reasoning_effort;
+  const effort =
+    stringOption(args, "effort") ?? config.reasoning_effort ?? DEFAULT_REASONING_EFFORT;
   if (!terminal.json)
     output.info(
       `  Checking ${targets.length === 1 ? targets[0]!.name : `${targets.length} providers`}${output.err.glyph.ellipsis}`,
@@ -776,6 +786,11 @@ async function checkProviders(context: AppContext, args: ParsedArgs): Promise<nu
         rows: results
           .filter((result) => !result.ok)
           .map((result) => [result.provider, result.failure?.message ?? "failed"]),
+        ...(results.some((result) => result.failure?.kind === "bad_request")
+          ? {
+              hint: "A provider that rejects the reasoning effort can have its own: providers update <provider> --effort <VALUE>. The value default sends none.",
+            }
+          : {}),
         data: { results: results.map(checkDocument) },
       },
     );

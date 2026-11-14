@@ -402,6 +402,68 @@ describe("providers", () => {
     ]);
   });
 
+  it("tests with the effort a scan would send and says how to change it", async () => {
+    const picky = await fakeUpstream((request, response) => {
+      const effort = request.body["reasoning_effort"];
+      if (effort !== undefined && effort !== "high") {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: { message: `reasoning_effort ${String(effort)} is not supported` },
+          }),
+        );
+        return;
+      }
+      const tools = request.body["tools"] as { function: { name: string } }[];
+      sendSse(
+        response,
+        [
+          [
+            undefined,
+            chatChunk({
+              role: "assistant",
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_1",
+                  type: "function",
+                  function: { name: tools[0]!.function.name, arguments: '{"status":"ok"}' },
+                },
+              ],
+            }),
+          ],
+          [undefined, chatChunk({}, "tool_calls")],
+        ],
+        true,
+      );
+    });
+    try {
+      const base = ["providers", "add", "picky", "--base-url", picky.baseUrl, "--model", "m"];
+      const rejected = await cli([...base, "--wire-api", "chat"]);
+      expect(rejected.code).toBe(1);
+      const message = rejected.stderr.replaceAll(/\s+/gu, " ");
+      expect(message).toContain("reasoning_effort xhigh is not supported");
+      expect(message).toContain(
+        "If it does not accept reasoning effort xhigh, pass --effort with a value it accepts, or --effort default to send none.",
+      );
+      expect(parseJson((await cli(["providers", "list", "--json"])).stdout)["providers"]).toEqual(
+        [],
+      );
+
+      const accepted = await cli([...base, "--wire-api", "chat", "--effort", "high", "--json"]);
+      expect(accepted.code).toBe(0);
+      expect(parseJson(accepted.stdout)["provider"]).toMatchObject({ reasoningEffort: "high" });
+      expect((await cli(["providers", "check", "--json"])).code).toBe(0);
+
+      // "default" sends no effort at all.
+      await cli(["providers", "update", "picky", "--effort", "default"]);
+      expect((await cli(["providers", "check", "--json"])).code).toBe(0);
+      expect(picky.requests.at(-1)!.body).not.toHaveProperty("reasoning_effort");
+    } finally {
+      await picky.close();
+    }
+  });
+
   it("uses a provider defined by environment variables first", async () => {
     await addProvider("saved");
     const result = await cli(["providers", "list", "--json"], {

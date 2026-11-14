@@ -666,7 +666,10 @@ function Providers(props: {
         resolveProvider(provider, context.env, props.loaded.keys),
         {
           signal: context.signal,
-          effort: provider.reasoning_effort ?? props.loaded.config.reasoning_effort,
+          effort:
+            provider.reasoning_effort ??
+            props.loaded.config.reasoning_effort ??
+            DEFAULT_REASONING_EFFORT,
         },
       );
       setChecks((current) => ({ ...current, [provider.name]: result }));
