@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -871,5 +871,122 @@ describe("scan planning", () => {
     const literal = await cli(["scan", "--dry-run", "--json", "--", work], { cwd: home });
     expect(literal.code).toBe(0);
     expect([work, await realpath(work)]).toContain(parseJson(literal.stdout)["scan"]["repository"]);
+  }, 120_000);
+});
+
+describe.skipIf(process.platform === "win32")("sandbox", () => {
+  const DENIED = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
+  const HELP = "https://github.com/kongyo2/kongyo-scan#linux-sandbox";
+  const linux = process.platform === "linux";
+  let tools: string;
+
+  beforeEach(async () => {
+    tools = await mkdtemp(join(tmpdir(), "kscan-tools-"));
+  });
+  afterEach(async () => {
+    await rm(tools, { recursive: true, force: true });
+  });
+
+  /** A Codex whose sandbox works, or fails as Bubblewrap does when it may not use user namespaces. */
+  async function fakeCodex(sandbox: "works" | "denied"): Promise<string> {
+    const file = join(tools, `codex-${sandbox}`);
+    await writeFile(
+      file,
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$CODEX_HOME" "$*" >> '${join(tools, "calls.log")}'`,
+        'for argument in "$@"; do',
+        '  if [ "$argument" = sandbox ]; then',
+        sandbox === "works" ? "    exit 0" : `    echo '${DENIED}' >&2; exit 1`,
+        "  fi",
+        "done",
+        "echo codex-cli 0.0.0-test",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(file, 0o755);
+    return file;
+  }
+
+  async function configureProvider(): Promise<void> {
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            name: "first",
+            base_url: "http://127.0.0.1:9/v1",
+            model: "model-a",
+            wire_api: "responses",
+          },
+        ],
+      }),
+      "utf8",
+    );
+  }
+
+  it("says why a scan cannot start and where the fix is", async () => {
+    execFileSync("git", ["init", "--quiet", work]);
+    await writeFile(join(work, "index.js"), "console.log(1);\n", "utf8");
+    await configureProvider();
+    const env = { CODEX_CLI_PATH: await fakeCodex("denied") };
+
+    const json = await cli(["scan", "--json"], { env });
+    expect(json.code).toBe(1);
+    expect(json.stdout).toBe("");
+    const error = parseJson(json.stderr);
+    expect(error).toMatchObject({ status: "error", reason: "unsupported_runtime" });
+    expect(error["message"]).toMatch(/^Can't start the scan\. The command sandbox /u);
+    expect(error["next"]).toEqual([
+      { command: "kongyo-scan doctor", argv: ["kongyo-scan", "doctor"] },
+    ]);
+    expect(error["data"]["sandbox"]["diagnostic"]).toBe(DENIED);
+    if (linux) {
+      expect(error["message"]).toContain("can't create user namespaces");
+      expect(error["data"]["sandbox"]["cause"]).toBe("user_namespaces");
+      expect(error["data"]["sandbox"]["fix"]).toContain(HELP);
+    }
+
+    const human = await cli(["scan"], { env });
+    expect(human.code).toBe(1);
+    expect(human.stdout).toBe("");
+    expect(human.stderr).toContain(`\n  ${DENIED}\n`);
+    expect(human.stderr).toContain("  Check the sandbox again:\n    kongyo-scan doctor\n");
+    if (linux) expect(human.stderr).toContain(HELP);
+    // The SDK's own advice is about its container image.
+    expect(human.stderr).not.toMatch(/Compose|container image|To reproduce/u);
+  }, 120_000);
+
+  it("checks the sandbox in doctor the way a scan does", async () => {
+    await configureProvider();
+    const sandboxCheck = (text: string): Record<string, string> =>
+      parseJson(text)["checks"].find((check: { name: string }) => check.name === "Sandbox");
+
+    const denied = await fakeCodex("denied");
+    const failing = await cli(["doctor", "--json"], { env: { CODEX_CLI_PATH: denied } });
+    expect(failing.code).toBe(1);
+    expect(failing.stderr).toBe("");
+    const failed = sandboxCheck(failing.stdout);
+    expect(failed["status"]).toBe("failed");
+    expect(failed["detail"]).toContain(DENIED);
+    if (linux) {
+      expect(failed["detail"]).toBe(`can't create user namespaces: ${DENIED}`);
+      expect(failed["fix"]).toContain(HELP);
+    }
+    expect(await readFile(join(tools, "calls.log"), "utf8")).toContain(
+      `${join(home, "state", "codex-home")}\nsandbox -- ${denied} --version\n`,
+    );
+
+    const human = await cli(["doctor"], { env: { CODEX_CLI_PATH: denied } });
+    expect(human.code).toBe(1);
+    expect(human.stdout).toContain(`Sandbox\tfailed\t`);
+    expect(human.stderr).toMatch(/^Error: \d of \d+ checks failed\.$/mu);
+    if (linux) expect(human.stderr).toMatch(/^Sandbox: .*#linux-sandbox$/mu);
+
+    const working = await cli(["doctor", "--json"], {
+      env: { CODEX_CLI_PATH: await fakeCodex("works") },
+    });
+    expect(sandboxCheck(working.stdout)["status"]).toBe("ok");
   }, 120_000);
 });

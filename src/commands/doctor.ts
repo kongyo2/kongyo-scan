@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { access, constants, mkdir } from "node:fs/promises";
 import { promisify } from "node:util";
 
+import type { CodexCommand } from "@openai/codex-security";
+
 import type { AppContext } from "../app/context.js";
 import { loadKeys } from "../app/context.js";
 import type { CommandSpec } from "../cli/args.js";
@@ -9,6 +11,12 @@ import { loadConfigFile } from "../config/store.js";
 import { CliError, describeError } from "../core/errors.js";
 import { displayPath } from "../core/paths.js";
 import { availableProviders } from "../providers/resolve.js";
+import {
+  diagnoseSandbox,
+  probeSandbox,
+  readSandboxFacts,
+  sandboxCodexHome,
+} from "../scan/sandbox.js";
 import { BIN, bundledCodexSecurityVersion, VERSION } from "../version.js";
 
 const run = promisify(execFile);
@@ -80,6 +88,36 @@ async function writable(directory: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function sandboxCheck(command: CodexCommand, context: AppContext): Promise<DoctorCheck> {
+  const name = "Sandbox";
+  let failure: string | undefined;
+  try {
+    failure = await probeSandbox(command, context.env, sandboxCodexHome(context.paths), {
+      signal: context.signal,
+    });
+  } catch (error) {
+    return { name, status: "warning", detail: `not checked: ${describeError(error)}` };
+  }
+  const facts = await readSandboxFacts(context.env);
+  if (failure === undefined) {
+    const detail =
+      process.platform !== "linux"
+        ? "commands run sandboxed"
+        : facts.bubblewrap === undefined
+          ? "Bubblewrap bundled with Codex"
+          : `Bubblewrap (${facts.bubblewrap})`;
+    return { name, status: "ok", detail };
+  }
+  const diagnosis = diagnoseSandbox(failure, facts);
+  const fix = [diagnosis.reason, diagnosis.fix].filter(Boolean).join(" ");
+  return {
+    name,
+    status: "failed",
+    detail: `${diagnosis.problem}: ${diagnosis.diagnostic}`,
+    ...(fix ? { fix } : {}),
+  };
 }
 
 export async function runDoctorChecks(context: AppContext): Promise<DoctorCheck[]> {
@@ -190,6 +228,8 @@ export async function runDoctorChecks(context: AppContext): Promise<DoctorCheck[
             fix: `Reinstall ${BIN} so the executable for ${process.platform}-${process.arch} is downloaded.`,
           },
     );
+    // Codex Security checks the sandbox only on these platforms, right before a scan.
+    if (version && process.platform !== "win32") checks.push(await sandboxCheck(command, context));
   } catch (error) {
     checks.push({
       name: "Codex runtime",
@@ -228,6 +268,8 @@ export async function runDoctorChecks(context: AppContext): Promise<DoctorCheck[
 async function doctor(context: AppContext): Promise<number> {
   const { output, terminal } = context;
   const checks = await runDoctorChecks(context);
+  // Checks cut short by Ctrl+C would read as failures.
+  context.signal.throwIfAborted();
   const failed = checks.filter((check) => check.status === "failed").length;
   const warnings = checks.filter((check) => check.status === "warning").length;
   if (terminal.json) {
@@ -282,6 +324,9 @@ export const doctorCommand: CommandSpec<AppContext> = {
   group: "Configure",
   summary: "Check that this machine can run scans",
   options: [{ name: "json", type: "boolean", description: "Output the result as JSON" }],
-  notes: ["Runs local checks only. Use providers check to test endpoints with a real request."],
+  notes: [
+    "Runs local checks only. Use providers check to test endpoints with a real request.",
+    "The Sandbox check runs one command in the Codex sandbox, as every scan does before it starts.",
+  ],
   run: doctor,
 };
