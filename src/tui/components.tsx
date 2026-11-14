@@ -226,17 +226,6 @@ export function TextField(props: TextFieldProps): ReactNode {
   );
 }
 
-export function Section(props: { title: string; children: ReactNode }): ReactNode {
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text bold>{props.title}</Text>
-      <Box flexDirection="column" paddingLeft={2}>
-        {props.children}
-      </Box>
-    </Box>
-  );
-}
-
 export function Row(props: { label: string; children: ReactNode; width?: number }): ReactNode {
   return (
     <Box>

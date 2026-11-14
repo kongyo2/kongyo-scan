@@ -1,6 +1,7 @@
 import {
   applyCompat,
   cleanSchema,
+  maxOutputTokens,
   resolveEffort,
   type ResponsesRequest,
   toChatRequest,
@@ -20,6 +21,8 @@ import {
 import type { TurnGuard } from "./turn-guard.js";
 import { emptyUsage, type ResolvedProvider, type TokenUsage, UpstreamError } from "./types.js";
 import { postUpstream, type RequestMeta, readText } from "./upstream.js";
+
+const MAX_JSON_BODY_BYTES = 64 * 1024 * 1024;
 
 export interface AttemptSink {
   readonly committed: boolean;
@@ -75,7 +78,7 @@ async function runChatAttempt(context: AttemptContext): Promise<AttemptResult> {
   try {
     const contentType = upstream.response.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
-      const text = await readText(upstream.response, 64 * 1024 * 1024);
+      const text = await readText(upstream.body(context.idleTimeoutMs), MAX_JSON_BODY_BYTES);
       const parsed = parseJson(text);
       if (isRecord(parsed) && parsed["error"] !== undefined && parsed["error"] !== null) {
         throw new UpstreamError(classifyStreamError(provider.name, parsed["error"]));
@@ -97,8 +100,9 @@ async function runChatAttempt(context: AttemptContext): Promise<AttemptResult> {
         }
         const chunk = parseJson(data);
         if (!isRecord(chunk)) continue;
-        if (chunk["error"] !== undefined && chunk["error"] !== null) {
-          throw new UpstreamError(classifyStreamError(provider.name, chunk["error"]));
+        const error = chunk["error"] ?? (message.event === "error" ? chunk : undefined);
+        if (error !== undefined && error !== null) {
+          throw new UpstreamError(classifyStreamError(provider.name, error));
         }
         translator.feed(chunk);
       }
@@ -154,10 +158,7 @@ async function runResponsesAttempt(context: AttemptContext): Promise<AttemptResu
           : isRecord(event["response"])
             ? event["response"]["error"]
             : undefined;
-      if (!relay.committed) throw new UpstreamError(classifyStreamError(provider.name, error));
-      terminal = true;
-      relay.write(type, event);
-      return;
+      throw new UpstreamError(classifyStreamError(provider.name, error));
     }
     if (isRecord(event["item"]))
       event["item"] = restoreItem(event["item"], provider, names, aliases);
@@ -209,7 +210,9 @@ async function runResponsesAttempt(context: AttemptContext): Promise<AttemptResu
   try {
     const contentType = upstream.response.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
-      const parsed = parseJson(await readText(upstream.response, 64 * 1024 * 1024));
+      const parsed = parseJson(
+        await readText(upstream.body(context.idleTimeoutMs), MAX_JSON_BODY_BYTES),
+      );
       if (!isRecord(parsed)) {
         throw new UpstreamError(
           protocolFailure(provider.name, "The endpoint returned an unexpected body."),
@@ -384,9 +387,8 @@ export function prepareResponsesBody(
     body["input"] = input;
   }
 
-  if (provider.maxOutputTokens !== undefined && body["max_output_tokens"] === undefined) {
-    body["max_output_tokens"] = provider.maxOutputTokens;
-  }
+  const outputLimit = maxOutputTokens(request, provider);
+  if (outputLimit !== undefined) body["max_output_tokens"] = outputLimit;
   applyCompat(body, provider);
   return { body, names, aliases: names === null ? namespaceAliases(request.tools) : new Map() };
 }

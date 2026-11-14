@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { constants } from "node:os";
 import { dirname, join } from "node:path";
 
 import type { AppContext } from "../app/context.js";
@@ -67,6 +68,59 @@ export function gatewayArguments(
     `${provider}.wire_api="responses"`,
   );
   return extra;
+}
+
+const CHILD_STOP_TIMEOUT_MS = 10_000;
+
+function signalExitCode(signal: NodeJS.Signals): number {
+  return 128 + (constants.signals[signal] ?? 0);
+}
+
+/**
+ * Runs a child with inherited streams and resolves with the exit code to report. When this
+ * process is told to stop, the child is told too, and is ended for good if it lingers.
+ */
+export function runChild(
+  command: string,
+  args: readonly string[],
+  environment: NodeJS.ProcessEnv,
+  context: Pick<AppContext, "signal" | "abortSignalName">,
+  stopTimeoutMs = CHILD_STOP_TIMEOUT_MS,
+): Promise<number> {
+  return new Promise<number>((resolvePromise, reject) => {
+    const child = spawn(command, [...args], { stdio: "inherit", env: environment });
+    let lingering: NodeJS.Timeout | undefined;
+    const endNow = (): void => void child.kill("SIGKILL");
+    const stop = (): void => {
+      // The child handles SIGINT and SIGTERM; a hangup reaches it as a request to terminate.
+      child.kill(context.abortSignalName() === "SIGINT" ? "SIGINT" : "SIGTERM");
+      lingering = setTimeout(endNow, stopTimeoutMs);
+    };
+    const settle = (): void => {
+      clearTimeout(lingering);
+      context.signal.removeEventListener("abort", stop);
+      process.off("exit", endNow);
+    };
+    process.once("exit", endNow);
+    if (context.signal.aborted) stop();
+    else context.signal.addEventListener("abort", stop, { once: true });
+    child.once("error", (error) => {
+      settle();
+      reject(
+        new CliError("platform", `Failed to start codex-security. ${error.message}`, {
+          reason: "spawn_failed",
+          cause: error,
+        }),
+      );
+    });
+    child.once("exit", (code, signal) => {
+      settle();
+      const interrupted = context.signal.aborted ? context.abortSignalName() : undefined;
+      if (interrupted !== undefined) resolvePromise(signalExitCode(interrupted));
+      else if (signal !== null) resolvePromise(signalExitCode(signal));
+      else resolvePromise(code ?? 1);
+    });
+  });
 }
 
 async function passthrough(context: AppContext, args: ParsedArgs): Promise<number> {
@@ -149,27 +203,12 @@ async function passthrough(context: AppContext, args: ParsedArgs): Promise<numbe
       }
     }
 
-    return await new Promise<number>((resolvePromise, reject) => {
-      const nodeArguments = ["--disable-warning=ExperimentalWarning", codexSecurityBin()];
-      const child = spawn(process.execPath, [...nodeArguments, ...childArguments], {
-        stdio: "inherit",
-        env: environment,
-      });
-      child.once("error", (error) => {
-        reject(
-          new CliError("platform", `Failed to start codex-security. ${error.message}`, {
-            reason: "spawn_failed",
-            cause: error,
-          }),
-        );
-      });
-      child.once("exit", (code, signal) => {
-        if (signal === "SIGINT") resolvePromise(130);
-        else if (signal === "SIGTERM") resolvePromise(143);
-        else if (signal === "SIGHUP") resolvePromise(129);
-        else resolvePromise(code ?? 1);
-      });
-    });
+    return await runChild(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", codexSecurityBin(), ...childArguments],
+      environment,
+      context,
+    );
   } finally {
     await gateway?.close().catch(() => undefined);
     await closeUpstreamDispatcher();

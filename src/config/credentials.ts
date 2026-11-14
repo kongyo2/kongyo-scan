@@ -3,6 +3,7 @@ import { chmod, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { configError, isNodeError } from "../core/errors.js";
+import { withFileLock } from "../core/lock.js";
 
 export interface Credentials {
   version: 1;
@@ -11,7 +12,7 @@ export interface Credentials {
 
 export type StoredKeys = Readonly<Record<string, string>>;
 
-export function emptyCredentials(): Credentials {
+function emptyCredentials(): Credentials {
   return { version: 1, providers: {} };
 }
 
@@ -96,8 +97,10 @@ async function updateCredentials(
   file: string,
   change: (credentials: Credentials) => boolean,
 ): Promise<void> {
-  const credentials = await loadCredentials(file);
-  if (change(credentials)) await saveCredentials(file, credentials);
+  await withFileLock(file, async () => {
+    const credentials = await loadCredentials(file);
+    if (change(credentials)) await saveCredentials(file, credentials);
+  });
 }
 
 export async function setProviderKey(

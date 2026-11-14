@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 
 interface PackageManifest {
-  name: string;
   version: string;
 }
 
@@ -12,8 +11,6 @@ function readManifest(url: URL): PackageManifest {
 }
 
 const manifest = readManifest(new URL("../package.json", import.meta.url));
-
-export const PACKAGE_NAME = manifest.name;
 
 export const VERSION = manifest.version;
 

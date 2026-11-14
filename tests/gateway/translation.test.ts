@@ -640,6 +640,20 @@ describe("prepareResponsesBody", () => {
     expect(toChatRequest(asked, provider()).body).not.toHaveProperty("reasoning_effort");
   });
 
+  it("keeps the output-token request within the provider's limit", () => {
+    const limited = provider({ wireApi: "responses", maxOutputTokens: 100 });
+    const tokens = (requested: number | undefined, target = limited): unknown =>
+      prepareResponsesBody(
+        requested === undefined ? request : { ...request, max_output_tokens: requested },
+        target,
+      ).body["max_output_tokens"];
+    expect(tokens(1000)).toBe(100);
+    expect(tokens(50)).toBe(50);
+    expect(tokens(undefined)).toBe(100);
+    expect(tokens(1000, provider({ wireApi: "responses" }))).toBe(1000);
+    expect(tokens(undefined, provider({ wireApi: "responses" }))).toBeUndefined();
+  });
+
   it("flattens tools and history for endpoints other than OpenAI's own", () => {
     const { body, names } = prepareResponsesBody(request, provider({ wireApi: "responses" }));
     expect(names).not.toBeNull();

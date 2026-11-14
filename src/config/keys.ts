@@ -29,12 +29,31 @@ export function splitKey(key: string, config: Config): string[] {
   return ["providers", name, ...fields];
 }
 
-export function isSecretKey(segments: readonly string[]): boolean {
-  const last = segments.at(-1) ?? "";
-  return (
-    last === "api_key" ||
-    (segments.includes("headers") && /authorization|api[-_]?key|token/iu.test(last))
-  );
+const CREDENTIAL_NAME =
+  /(?:(?:^|[-_.])key|api[-_]?key|token|secret|password|passphrase|credentials?|authorization|cookie|signature)$/iu;
+const PLACEHOLDER_ONLY = /^(?:[A-Za-z][A-Za-z0-9-]* +)?\{(?:api_key|session_id)\}$/u;
+
+function isSecretKey(segments: readonly string[]): boolean {
+  if (segments[0] === "providers" && segments.length < 3) return false;
+  return CREDENTIAL_NAME.test(segments.at(-1) ?? "");
+}
+
+export function isSecretValue(segments: readonly string[], value: unknown): value is string {
+  return typeof value === "string" && isSecretKey(segments) && !PLACEHOLDER_ONLY.test(value);
+}
+
+export function redact(value: unknown, segments: readonly string[] = []): unknown {
+  if (Array.isArray(value))
+    return value.map((item, index) => redact(item, [...segments, String(index)]));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Container).map(([key, child]) => [
+        key,
+        redact(child, [...segments, key]),
+      ]),
+    );
+  }
+  return isSecretValue(segments, value) ? maskSecret(value) : value;
 }
 
 function providerIndex(config: Config, name: string): number {
@@ -249,18 +268,30 @@ function describeType(node: SchemaNode): string {
   return node.type ?? "value";
 }
 
-export function flattenConfig(config: Config): { key: string; value: unknown; secret: boolean }[] {
-  const rows: { key: string; value: unknown; secret: boolean }[] = [];
+export interface SettingRow {
+  key: string;
+  segments: string[];
+  value: unknown;
+  secret: boolean;
+}
+
+export function flattenConfig(config: Config): SettingRow[] {
+  const rows: SettingRow[] = [];
   const visit = (value: unknown, segments: string[]): void => {
     if (value !== null && typeof value === "object" && !Array.isArray(value)) {
       const entries = Object.entries(value as Container);
       if (entries.length === 0 && segments.length > 0) {
-        rows.push({ key: segments.join("."), value, secret: false });
+        rows.push({ key: segments.join("."), segments, value, secret: false });
       }
       for (const [name, child] of entries) visit(child, [...segments, name]);
       return;
     }
-    rows.push({ key: segments.join("."), value, secret: isSecretKey(segments) });
+    rows.push({
+      key: segments.join("."),
+      segments,
+      value,
+      secret: isSecretValue(segments, value),
+    });
   };
   for (const [name, value] of Object.entries(config)) {
     if (name === "$schema") continue;

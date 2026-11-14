@@ -149,7 +149,7 @@ export class ProviderChain {
         observe({ type: "failure", id, failure, committed: relay.committed });
         if (relay.committed) {
           relay.fail(
-            streamErrorCode(failure) ?? "upstream_error",
+            streamErrorCode(failure) ?? failure.code ?? "upstream_error",
             `${failure.provider}: ${failure.message}`,
           );
           return;

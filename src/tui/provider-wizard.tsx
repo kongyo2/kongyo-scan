@@ -5,8 +5,13 @@ import type { AppContext } from "../app/context.js";
 import { loadKeys, loadUserConfig } from "../app/context.js";
 import { formatDuration } from "../cli/format.js";
 import { formatCommand } from "../cli/output.js";
-import { buildProvider, keyLabel, verifyProvider } from "../commands/providers.js";
-import { setProviderKey, type StoredKeys } from "../config/credentials.js";
+import {
+  buildProvider,
+  keyLabel,
+  keysForNewProvider,
+  verifyProvider,
+} from "../commands/providers.js";
+import { deleteProviderKey, setProviderKey, type StoredKeys } from "../config/credentials.js";
 import { CUSTOM_PRESET_ID, findPreset, PROVIDER_PRESETS } from "../config/presets.js";
 import {
   type Config,
@@ -130,9 +135,7 @@ export function ProviderWizard(props: ProviderWizardProps): ReactNode {
       props.env,
     );
   const candidateKeys = (provider: ProviderConfig): StoredKeys =>
-    keyMode === "paste"
-      ? { ...props.keys, [provider.name.toLowerCase()]: apiKey.trim() }
-      : props.keys;
+    keysForNewProvider(props.keys, provider.name, keyMode === "paste" ? apiKey.trim() : undefined);
 
   useEffect(() => {
     if (step !== "models") return;
@@ -693,6 +696,7 @@ export async function saveProvider(
   });
   if (apiKey !== undefined)
     await setProviderKey(context.paths.credentialsFile, provider.name, apiKey);
+  else await deleteProviderKey(context.paths.credentialsFile, provider.name);
   const providers = saved.providers ?? [];
   return {
     position: providers.findIndex((item) => item.name === provider.name) + 1,

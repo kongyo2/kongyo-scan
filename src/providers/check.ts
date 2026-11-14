@@ -251,10 +251,13 @@ export async function detectWireApi(
   provider: ResolvedProvider,
   options: CheckOptions = {},
 ): Promise<{ wireApi: WireApi | undefined; results: CheckResult[] }> {
+  // Where both work, Chat Completions is the safer choice on compatible endpoints;
+  // OpenAI's own endpoint keeps reasoning between requests only over Responses.
+  const order: readonly WireApi[] = provider.compat.nativeResponses
+    ? ["responses", "chat"]
+    : ["chat", "responses"];
   const results = await Promise.all(
-    (["chat", "responses"] as const).map((wireApi) =>
-      checkProvider({ ...provider, wireApi }, options),
-    ),
+    order.map((wireApi) => checkProvider({ ...provider, wireApi }, options)),
   );
   const usable = results.filter((result) => result.ok && result.toolCall);
   const answering = results.filter((result) => result.ok);

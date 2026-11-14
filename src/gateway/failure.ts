@@ -200,10 +200,6 @@ function clip(text: string): string {
   return line.length > MAX_MESSAGE ? `${line.slice(0, MAX_MESSAGE - 1)}…` : line;
 }
 
-export function isRequestSpecific(kind: FailureKind): boolean {
-  return kind === "context_length" || kind === "bad_request";
-}
-
 export function cooldownFor(failure: UpstreamFailure, defaultCooldownMs: number): number {
   switch (failure.kind) {
     case "context_length":

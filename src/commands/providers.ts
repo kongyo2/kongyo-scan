@@ -306,6 +306,19 @@ export function buildProvider(inputs: AddInputs, env: NodeJS.ProcessEnv): Provid
   return provider;
 }
 
+/**
+ * The stored keys a provider being added may use. A key already stored under its name belongs
+ * to whatever had that name before, possibly another endpoint, so it is never carried over.
+ */
+export function keysForNewProvider(
+  stored: StoredKeys,
+  name: string,
+  apiKey: string | undefined,
+): StoredKeys {
+  const { [name.toLowerCase()]: _previous, ...others } = stored;
+  return apiKey === undefined ? others : { ...others, [name.toLowerCase()]: apiKey };
+}
+
 export async function verifyProvider(
   provider: ProviderConfig,
   env: NodeJS.ProcessEnv,
@@ -380,9 +393,7 @@ async function addProvider(context: AppContext, args: ParsedArgs): Promise<numbe
   );
 
   const existing = await loadUserConfig(context);
-  const savedKeys = await loadKeys(context);
-  const keys: StoredKeys =
-    apiKey === undefined ? savedKeys : { ...savedKeys, [provider.name.toLowerCase()]: apiKey };
+  const keys = keysForNewProvider(await loadKeys(context), provider.name, apiKey);
   const taken = (existing.providers ?? []).some(
     (item) => item.name.toLowerCase() === provider.name.toLowerCase(),
   );
@@ -448,8 +459,7 @@ async function addProvider(context: AppContext, args: ParsedArgs): Promise<numbe
   });
   if (apiKey !== undefined)
     await setProviderKey(context.paths.credentialsFile, provider.name, apiKey);
-  else if (taken && provider.api_key_env !== undefined)
-    await deleteProviderKey(context.paths.credentialsFile, provider.name);
+  else await deleteProviderKey(context.paths.credentialsFile, provider.name);
   const position = findIndex(saved, provider.name) + 1;
   const outcome = taken ? "replaced" : "added";
 
@@ -966,6 +976,7 @@ export const providersCommand: CommandSpec<AppContext> = {
         "Without --wire-api, both APIs are probed and the working one is saved.",
         "The endpoint is tested before anything is saved.",
         "--api-key-stdin stores the key in a file only you can read, in a directory the scan sandbox is denied, so scans never see it.",
+        "--force replaces the whole provider, stored key included. Give the key again, or use providers update to change single fields.",
       ],
       run: addProvider,
     },

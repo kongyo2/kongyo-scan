@@ -116,8 +116,28 @@ describe("parseInvocation", () => {
     expect(parse(["codex-security", "--help"]).args.rest).toEqual(["--help"]);
   });
 
-  it("keeps literal arguments after --", () => {
-    expect(parse(["scan", "--", "--weird-dir"]).args.rest).toEqual(["--weird-dir"]);
+  it("reads arguments after -- as literal positionals", () => {
+    const scan = parse(["scan", "--mode", "deep", "--", "--weird-dir"]);
+    expect(scan.args.positionals).toEqual(["--weird-dir"]);
+    expect(scan.args.rest).toEqual([]);
+    expect(scan.args.values["mode"]).toBe("deep");
+    expect(parse(["scans", "inspect", "--", "--help"]).help).toBe(false);
+    expect(parse(["providers", "remove", "--", "-odd-name"]).args.positionals).toEqual([
+      "-odd-name",
+    ]);
+    expect(failure(["scan", "repo", "--", "other"]).message).toContain("takes at most 1 argument");
+    expect(failure(["doctor", "--", "extra"]).message).toContain("takes no arguments");
+    expect(failure(["--", "scan"]).message).toContain("takes no arguments");
+  });
+
+  it("applies its own options only before a passthrough command", () => {
+    expect(failure(["--bogus", "codex-security", "scans", "list"]).reason).toBe("unknown_option");
+    const machine = parse(["--json", "codex-security", "scans", "list", "--json"]);
+    expect(machine.args.values["json"]).toBe(true);
+    expect(machine.args.rest).toEqual(["scans", "list", "--json"]);
+    expect(parse(["--help", "codex-security"]).help).toBe(true);
+    expect(parse(["codex-security", "--help"]).help).toBe(false);
+    expect(parse(["codex-security", "--", "--version"]).version).toBe(false);
   });
 });
 

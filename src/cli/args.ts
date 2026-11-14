@@ -2,7 +2,6 @@ import { parseArgs, type ParseArgsConfig } from "node:util";
 
 import { CliError, usageError } from "../core/errors.js";
 import { closest } from "../core/suggest.js";
-import { BIN } from "../version.js";
 
 export type OptionType = "boolean" | "string" | "number" | "list";
 
@@ -48,7 +47,9 @@ export interface CommandSpec<Context = unknown> {
 
 export interface ParsedArgs {
   values: Readonly<Record<string, string | number | boolean | string[] | undefined>>;
+  /** Positional arguments, including the literal ones written after `--`. */
   positionals: readonly string[];
+  /** The arguments a passthrough command hands to its child; empty for every other command. */
   rest: readonly string[];
 }
 
@@ -194,13 +195,14 @@ export function parseInvocation<Context>(
 
   const path = chain.map((item) => item.name).join(" ");
   if (command.passthrough) {
-    const leading = parseKnown(remaining, GLOBAL_OPTIONS, path, true);
+    // Only this CLI's own options come before the command; --json shapes its own errors.
+    const leading = parseKnown(remaining, [...GLOBAL_OPTIONS, JSON_FLAG], path, false);
     return {
       chain,
       command,
       path,
-      help: leading.values["help"] === true && rest.length === 0,
-      version: false,
+      help: leading.values["help"] === true,
+      version: leading.values["help"] !== true && leading.values["version"] === true,
       args: { values: leading.values, positionals: [], rest },
       bare: false,
     };
@@ -210,24 +212,41 @@ export function parseInvocation<Context>(
   const informational = specs.some((spec) => spec.name === "json") ? specs : [...specs, JSON_FLAG];
   if (remaining.some((token) => token === "--help" || token === "-h")) {
     const lenient = parseKnown(remaining, informational, path, true);
-    return { chain, command, path, help: true, version: false, args: { ...lenient, rest }, bare };
+    return {
+      chain,
+      command,
+      path,
+      help: true,
+      version: false,
+      args: { values: lenient.values, positionals: [...lenient.positionals, ...rest], rest: [] },
+      bare,
+    };
   }
   if (remaining.some((token) => token === "--version" || token === "-v")) {
     const lenient = parseKnown(remaining, informational, path, true);
     if (lenient.values["version"] === true) {
-      return { chain, command, path, help: false, version: true, args: { ...lenient, rest }, bare };
+      return {
+        chain,
+        command,
+        path,
+        help: false,
+        version: true,
+        args: { values: lenient.values, positionals: [...lenient.positionals, ...rest], rest: [] },
+        bare,
+      };
     }
   }
   const parsed = parseKnown(remaining, specs, path, false);
-  validatePositionals(command, parsed.positionals, path);
+  const positionals = [...parsed.positionals, ...rest];
+  validatePositionals(command, positionals, path);
   return {
     chain,
     command,
     path,
     help: false,
     version: false,
-    args: { ...parsed, rest },
-    bare: bare && parsed.positionals.length === 0,
+    args: { values: parsed.values, positionals, rest: [] },
+    bare: bare && positionals.length === 0,
   };
 }
 
@@ -240,7 +259,6 @@ function parseKnown(
   values: Record<string, string | number | boolean | string[] | undefined>;
   positionals: string[];
 } {
-  const byFlag = optionMap(specs);
   const booleans = new Set(
     specs.filter((spec) => spec.type === "boolean").map((spec) => spec.name),
   );
@@ -310,7 +328,6 @@ function parseKnown(
     if (!lenient) checkChoice(spec, raw, path);
     values[spec.name] = raw;
   }
-  void byFlag;
   return { values, positionals: result.positionals };
 }
 
@@ -421,5 +438,3 @@ export function listOption(args: ParsedArgs, name: string): string[] | undefined
   const value = args.values[name];
   return Array.isArray(value) ? value : undefined;
 }
-
-export const ROOT_NAME = BIN;

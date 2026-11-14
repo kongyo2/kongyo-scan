@@ -1,4 +1,4 @@
-import type { ProviderConfig, WireApi } from "./schema.js";
+import type { WireApi } from "./schema.js";
 
 export interface ProviderPreset {
   id: string;
@@ -9,7 +9,6 @@ export interface ProviderPreset {
   api_key_env?: string;
   needs_key: boolean;
   headers?: Record<string, string>;
-  example_model?: string;
 }
 
 export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
@@ -101,20 +100,4 @@ export const CUSTOM_PRESET_ID = "custom";
 export function findPreset(id: string): ProviderPreset | undefined {
   const wanted = id.toLowerCase();
   return PROVIDER_PRESETS.find((preset) => preset.id === wanted);
-}
-
-export function providerFromPreset(
-  preset: ProviderPreset,
-  choices: { name?: string; model: string; api_key?: string; api_key_env?: string },
-): ProviderConfig {
-  const provider: ProviderConfig = {
-    name: choices.name ?? preset.id,
-    base_url: preset.base_url,
-    model: choices.model,
-    wire_api: preset.wire_api,
-  };
-  if (choices.api_key !== undefined) provider.api_key = choices.api_key;
-  if (choices.api_key_env !== undefined) provider.api_key_env = choices.api_key_env;
-  if (preset.headers) provider.headers = { ...preset.headers };
-  return provider;
 }
