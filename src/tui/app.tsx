@@ -101,7 +101,7 @@ function Frame(props: { context: AppContext; title: string; children: ReactNode 
   );
 }
 
-function ErrorBlock(props: { error: unknown }): ReactNode {
+export function ErrorBlock(props: { error: unknown }): ReactNode {
   const { error } = props;
   if (error instanceof CanceledError) {
     return (
@@ -119,14 +119,20 @@ function ErrorBlock(props: { error: unknown }): ReactNode {
         {message}
       </Text>
       {cli?.details.slice(0, 5).map((detail) => (
-        <Text key={detail}>{`  ${detail}`}</Text>
+        <Box key={detail} paddingLeft={2}>
+          <Text>{detail}</Text>
+        </Box>
       ))}
       {cli?.rows.map(([label, value]) => (
         <Row key={`${label}:${value}`} label={`  ${label}`} width={18}>
           {value}
         </Row>
       ))}
-      {cli?.hint ? <Text>{`  ${cli.hint}`}</Text> : null}
+      {cli?.hint ? (
+        <Box paddingLeft={2} marginTop={1}>
+          <Text>{cli.hint}</Text>
+        </Box>
+      ) : null}
       {cli?.next.slice(0, 2).map((step) => (
         <Box key={step.label} flexDirection="column" marginTop={1}>
           <Text>{`  ${step.label}:`}</Text>

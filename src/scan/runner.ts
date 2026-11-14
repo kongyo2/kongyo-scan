@@ -24,6 +24,7 @@ import {
   type SeverityCounts,
   summarizeFindings,
 } from "./results.js";
+import { readSandboxFacts, sandboxUnavailableError } from "./sandbox.js";
 
 export const GATEWAY_TOKEN_ENV = "KONGYO_SCAN_GATEWAY_TOKEN";
 export const GATEWAY_PROVIDER_ID = "kongyo-scan";
@@ -285,7 +286,7 @@ export async function preflightScan(plan: ScanPlan, paths: AppPaths): Promise<Pr
         failOnSeverity: plan.failOnSeverity ?? null,
       };
     } catch (error) {
-      throw translateSdkError(sdk, error, {
+      throw await translateSdkError(sdk, error, {
         plan,
         failures: [],
         scanId: undefined,
@@ -493,7 +494,7 @@ export async function runScan(
     return outcome;
   } catch (error) {
     const canceled = controller.signal.aborted && !costLimited;
-    const translated = translateSdkError(sdk, error, {
+    const translated = await translateSdkError(sdk, error, {
       plan,
       failures: exhausted,
       scanId: registered?.scanId,
@@ -528,11 +529,11 @@ const PROVIDER_CHECK_STEP = {
   argv: ["kongyo-scan", "providers", "check"],
 };
 
-function translateSdkError(
+async function translateSdkError(
   sdk: Sdk,
   error: unknown,
   context: FailureContext,
-): CliError | CanceledError {
+): Promise<CliError | CanceledError> {
   if (error instanceof CliError || error instanceof CanceledError) return error;
   const idRows: [string, string][] = [];
   if (context.scanId) idRows.push(["Scan ID", context.scanId]);
@@ -601,16 +602,7 @@ function translateSdkError(
     });
   }
   if (error instanceof sdk.SandboxUnavailableError) {
-    return new CliError(
-      "platform",
-      "Can't start the scan. The command sandbox isn't available on this machine.",
-      {
-        reason: "unsupported_runtime",
-        details: [message],
-        next: [{ label: "Check the environment", argv: ["kongyo-scan", "doctor"] }],
-        cause: error,
-      },
-    );
+    return sandboxUnavailableError(error, await readSandboxFacts());
   }
   if (error instanceof sdk.InvalidTargetError) {
     return new CliError("usage", `Can't scan this target. ${message}`, {

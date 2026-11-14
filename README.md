@@ -14,6 +14,7 @@ Security scans for your own repositories, powered by [Codex Security](https://gi
 - Node.js 22.13 or newer (22.x, 24.x, or 26.x)
 - Python 3.10 or newer, which Codex Security needs for scans
 - Git, for diff and working-tree scans
+- On Linux, [Bubblewrap](https://github.com/containers/bubblewrap) and permission to create user namespaces, which the command sandbox needs. On Ubuntu this takes a one-time setup: see [Linux sandbox](#linux-sandbox)
 - An API key for at least one OpenAI-compatible endpoint, or a local model server
 
 Run `kongyo-scan doctor` to check all of this at once.
@@ -179,6 +180,7 @@ kongyo-scan scan --diff origin/main --fail-on-severity high --json > scan.json
 - Results go to stdout. Progress, receipts, and errors go to stderr.
 - With `--json`, stdout holds exactly one JSON document, and a failure is one JSON document on stderr.
 - Nothing prompts when there is no terminal, in CI, or with `--non-interactive`.
+- GitHub-hosted Ubuntu 24.04 runners need the [Linux sandbox](#linux-sandbox) setup in a step before the scan.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -255,6 +257,74 @@ kongyo-scan codex-security -- scans list
 | `~/.kongyo-scan/history.jsonl` | One line per scan started by kongyo-scan |
 
 Set `KONGYO_SCAN_HOME` or pass `--home <DIR>` to use another directory. kongyo-scan does not read or write your own `~/.codex`.
+
+## Linux sandbox
+
+Codex Security runs every command of a scan inside a sandbox. On Linux that sandbox is [Bubblewrap](https://github.com/containers/bubblewrap), which has to create user namespaces. When it can't, a scan stops before it starts:
+
+```text
+Can't start the scan. The command sandbox can't create user namespaces on this machine.
+  bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+```
+
+`kongyo-scan doctor` runs the same check under **Sandbox** and says what is missing.
+
+### Install Bubblewrap
+
+Codex uses the first `bwrap` on your `PATH`, and a copy bundled with it when there is none. Install the package of your distribution, so that an AppArmor profile can apply to it:
+
+```bash
+sudo apt install bubblewrap
+```
+
+### Ubuntu 24.04: add an AppArmor profile
+
+On Ubuntu 24.04 and later, a program may use unprivileged user namespaces only when an AppArmor profile allows it (`kernel.apparmor_restrict_unprivileged_userns=1`), and Ubuntu 24.04 has no profile for Bubblewrap. Add one for `/usr/bin/bwrap`. If `command -v bwrap` prints another path, use that path in the profile.
+
+```bash
+sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+EOF
+```
+
+Reload AppArmor to apply it, then check:
+
+```bash
+sudo systemctl reload apparmor
+```
+
+```bash
+kongyo-scan doctor
+```
+
+This profile lets every program started through `bwrap` use user namespaces. Ubuntu has a stricter one in the `apparmor-profiles` package, which keeps capabilities away from the programs Bubblewrap starts. Ubuntu 24.04 leaves it off because it can break some other uses of Bubblewrap. Use one profile or the other, not both: each defines a profile named `bwrap`.
+
+```bash
+sudo apt install apparmor-profiles
+```
+
+```bash
+sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+```
+
+```bash
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
+Ubuntu 25.04 and later enable that stricter profile by default, so installing `bubblewrap` is enough there.
+
+### Other systems
+
+- **CI.** GitHub-hosted Ubuntu 24.04 runners have the same restriction. Run the commands above in a step before the scan.
+- **Containers.** A container runtime usually blocks user namespaces inside the container. Scan on the host, or give the container a profile that allows them, as the [Codex Security Docker guide](https://github.com/openai/codex-security/blob/main/docker/README.md) does.
+- **Other kernels.** Unprivileged user namespaces can also be switched off with `kernel.unprivileged_userns_clone=0` or `user.max_user_namespaces=0`. Turn them on with `sysctl`.
+- **WSL.** WSL 2 works like Linux. WSL 1 can't create user namespaces.
 
 ## Development
 

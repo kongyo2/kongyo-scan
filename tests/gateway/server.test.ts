@@ -634,7 +634,8 @@ describe("gateway", () => {
     );
     const text = (await post(instance)).text;
     expect(text).toContain("from the fallback");
-    expect(text).not.toContain("resp_1");
+    // The whole ID, quoted: the gateway's own IDs are random and may start with resp_1.
+    expect(text).not.toContain('"resp_1"');
     expect(events.find((event) => event.type === "failure")).toMatchObject({
       failure: { provider: "first", kind: "protocol" },
     });

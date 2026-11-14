@@ -3,8 +3,10 @@ import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { Config } from "../../src/config/schema.js";
+import { CliError } from "../../src/core/errors.js";
 import { resolveScanPlan } from "../../src/scan/plan.js";
 import type { ScanEvent } from "../../src/scan/runner.js";
+import { ErrorBlock } from "../../src/tui/app.js";
 import { ColorProvider, KeyHints, SelectList, TextField } from "../../src/tui/components.js";
 import {
   initialScanViewState,
@@ -343,5 +345,42 @@ describe("key hints", () => {
       </ColorProvider>,
     );
     expect(lastFrame()).toBe("↑↓ move  enter select");
+  });
+});
+
+describe("error block", () => {
+  it("lays out the cause, the fix, and the next step, and keeps wrapped lines indented", () => {
+    const error = new CliError(
+      "platform",
+      "Can't start the scan. The command sandbox can't create user namespaces on this machine.",
+      {
+        reason: "unsupported_runtime",
+        details: [
+          "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+          "AppArmor restricts unprivileged user namespaces here, and /usr/bin/bwrap has no profile that allows them.",
+        ],
+        hint: "Add an AppArmor profile for /usr/bin/bwrap, then reload AppArmor. Steps: https://github.com/kongyo2/kongyo-scan#linux-sandbox",
+        next: [{ label: "Check the sandbox again", argv: ["kongyo-scan", "doctor"] }],
+      },
+    );
+    const { lastFrame } = render(
+      <ColorProvider color={false}>
+        <ErrorBlock error={error} />
+      </ColorProvider>,
+    );
+    expect(lastFrame()).toBe(
+      [
+        "✗ Can't start the scan. The command sandbox can't create user namespaces on this machine.",
+        "  bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+        "  AppArmor restricts unprivileged user namespaces here, and /usr/bin/bwrap has no profile that",
+        "  allows them.",
+        "",
+        "  Add an AppArmor profile for /usr/bin/bwrap, then reload AppArmor. Steps:",
+        "  https://github.com/kongyo2/kongyo-scan#linux-sandbox",
+        "",
+        "  Check the sandbox again:",
+        "    kongyo-scan doctor",
+      ].join("\n"),
+    );
   });
 });

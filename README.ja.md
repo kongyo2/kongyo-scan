@@ -14,6 +14,7 @@ English: [README.md](./README.md)
 - Node.js 22.13 以上（22.x / 24.x / 26.x）
 - Python 3.10 以上（Codex Security がスキャンに使います）
 - Git（差分スキャン・作業ツリースキャンに必要）
+- Linux では [Bubblewrap](https://github.com/containers/bubblewrap) と、ユーザー名前空間を作成できること（コマンドのサンドボックスに必要）。Ubuntu では最初に一度だけ設定が要ります。[Linux のサンドボックス](#linux-sandbox) を参照
 - OpenAI互換エンドポイントのAPIキーを1つ以上、またはローカルのモデルサーバー
 
 `kongyo-scan doctor` でまとめて確認できます。
@@ -179,6 +180,7 @@ kongyo-scan scan --diff origin/main --fail-on-severity high --json > scan.json
 - 結果は標準出力、進捗・完了メッセージ・エラーは標準エラー出力に出ます。
 - `--json` を付けると、標準出力はJSON 1つだけになります。失敗時は標準エラー出力にJSONが1つ出ます。
 - ターミナルがない場合、CI環境、`--non-interactive` 指定時は一切プロンプトを出しません。
+- GitHub ホストの Ubuntu 24.04 ランナーでは、スキャンより前のステップで [Linux のサンドボックス](#linux-sandbox) の設定が必要です。
 
 | 終了コード | 意味 |
 | --- | --- |
@@ -255,6 +257,76 @@ kongyo-scan codex-security -- scans list
 | `~/.kongyo-scan/history.jsonl` | kongyo-scan が開始したスキャンの記録（1行1件） |
 
 別のディレクトリを使うには `KONGYO_SCAN_HOME` を設定するか `--home <DIR>` を渡します。自分の `~/.codex` は読み書きしません。
+
+<a id="linux-sandbox"></a>
+
+## Linux のサンドボックス
+
+Codex Security は、スキャン中のコマンドをすべてサンドボックスの中で実行します。Linux ではそのサンドボックスが [Bubblewrap](https://github.com/containers/bubblewrap) で、ユーザー名前空間を作成できる必要があります。作成できない場合、スキャンは開始前に止まります。
+
+```text
+Can't start the scan. The command sandbox can't create user namespaces on this machine.
+  bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+```
+
+`kongyo-scan doctor` の **Sandbox** が同じ検査を行い、何が足りないかを表示します。
+
+### Bubblewrap をインストールする
+
+Codex は `PATH` 上で最初に見つかった `bwrap` を使い、見つからなければ同梱のものを使います。AppArmor プロファイルを適用できるように、ディストリビューションのパッケージを入れてください。
+
+```bash
+sudo apt install bubblewrap
+```
+
+### Ubuntu 24.04: AppArmor プロファイルを追加する
+
+Ubuntu 24.04 以降では、AppArmor プロファイルで許可されたプログラムだけが非特権ユーザー名前空間を使えます（`kernel.apparmor_restrict_unprivileged_userns=1`）。Ubuntu 24.04 には Bubblewrap 用のプロファイルがないので、`/usr/bin/bwrap` 用に追加します。`command -v bwrap` が別のパスを表示する場合は、プロファイル内のパスをそれに合わせてください。
+
+```bash
+sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+EOF
+```
+
+AppArmor を再読み込みして適用し、確認します。
+
+```bash
+sudo systemctl reload apparmor
+```
+
+```bash
+kongyo-scan doctor
+```
+
+このプロファイルは、`bwrap` 経由で起動したすべてのプログラムにユーザー名前空間の利用を許可します。Ubuntu の `apparmor-profiles` パッケージには、Bubblewrap が起動するプログラムにケーパビリティを渡さない、より厳しいプロファイルがあります。Bubblewrap のほかの使い方に支障が出ることがあるため、Ubuntu 24.04 では無効になっています。どちらも `bwrap` という名前のプロファイルを定義するので、使うのはどちらか一方だけにしてください。
+
+```bash
+sudo apt install apparmor-profiles
+```
+
+```bash
+sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+```
+
+```bash
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
+Ubuntu 25.04 以降はこの厳しいほうのプロファイルが既定で有効なので、`bubblewrap` をインストールするだけで足ります。
+
+### そのほかの環境
+
+- **CI。** GitHub ホストの Ubuntu 24.04 ランナーにも同じ制限があります。スキャンより前のステップで上のコマンドを実行してください。
+- **コンテナ。** コンテナランタイムは通常、コンテナ内でのユーザー名前空間の作成を禁止しています。ホストでスキャンするか、[Codex Security の Docker ガイド](https://github.com/openai/codex-security/blob/main/docker/README.md) のように、作成を許可するプロファイルをコンテナに与えてください。
+- **そのほかのカーネル。** 非特権ユーザー名前空間は `kernel.unprivileged_userns_clone=0` や `user.max_user_namespaces=0` でも無効になります。`sysctl` で有効にしてください。
+- **WSL。** WSL 2 は Linux と同じように動きます。WSL 1 はユーザー名前空間を作成できません。
 
 ## 開発
 
