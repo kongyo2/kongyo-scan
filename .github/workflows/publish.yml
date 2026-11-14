@@ -1,0 +1,106 @@
+name: Publish to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: npm dist-tag to publish under
+        type: string
+        default: latest
+      dry-run:
+        description: Build and verify the package without publishing it
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish @kongyo2/kongyo-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check (format, lint, types, tests)
+        run: node --run check
+
+      - name: Read the package version
+        id: package
+        run: |
+          echo "name=$(node -p "require('./package.json').name")" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Validate the release
+        env:
+          NAME: ${{ steps.package.outputs.name }}
+          VERSION: ${{ steps.package.outputs.version }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^[a-z][a-z0-9._-]*$ ]]; then
+            echo "::error::\"$TAG\" is not a valid dist-tag. Use a name such as latest, next, or beta."
+            exit 1
+          fi
+          case "$VERSION" in
+            *-*)
+              if [ "$TAG" = "latest" ]; then
+                echo "::error::$VERSION is a prerelease. Publish it under a dist-tag such as next, not latest."
+                exit 1
+              fi
+              ;;
+          esac
+          published="$(npm view "$NAME" versions --json 2>/dev/null || true)"
+          if printf '%s' "$published" | node -e '
+            let text = "";
+            process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => {
+              let versions = [];
+              try {
+                const parsed = JSON.parse(text);
+                versions = Array.isArray(parsed) ? parsed : typeof parsed === "string" ? [parsed] : [];
+              } catch {}
+              process.exit(versions.includes(process.argv[1]) ? 0 : 1);
+            });
+          ' "$VERSION"; then
+            echo "::error::$NAME@$VERSION is already on npm. Bump the version in package.json, then run this workflow again."
+            exit 1
+          fi
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry-run && '--dry-run' || '' }}
+        run: npm publish --access public --tag "$TAG" $DRY_RUN
+
+      - name: Summarize
+        env:
+          NAME: ${{ steps.package.outputs.name }}
+          VERSION: ${{ steps.package.outputs.version }}
+          TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: \`$NAME@$VERSION\` was built and verified, not published." >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "Published \`$NAME@$VERSION\` under the \`$TAG\` dist-tag from \`${GITHUB_SHA}\`."
+              echo
+              echo '```bash'
+              echo "npm install --global $NAME@$VERSION"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

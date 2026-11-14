@@ -1,0 +1,73 @@
+{
+  "name": "@kongyo2/kongyo-scan",
+  "version": "0.1.0",
+  "description": "Local security scans powered by Codex Security on any OpenAI-compatible LLM endpoint, with provider fallback and an interactive TUI",
+  "keywords": [
+    "cli",
+    "codex-security",
+    "llm",
+    "openai-compatible",
+    "sast",
+    "scanner",
+    "security",
+    "tui"
+  ],
+  "homepage": "https://github.com/kongyo2/kongyo-scan#readme",
+  "bugs": "https://github.com/kongyo2/kongyo-scan/issues",
+  "license": "MIT",
+  "author": "kongyo2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kongyo2/kongyo-scan.git"
+  },
+  "bin": {
+    "kongyo-scan": "./bin/kongyo-scan.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "schemas",
+    "LICENSE",
+    "README.md",
+    "README.ja.md"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "node --run clean && tsc -p tsconfig.build.json",
+    "schema": "node --run build && node scripts/generate-schema.mjs && oxfmt --write schemas/config.schema.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "oxfmt --check",
+    "format:fix": "oxfmt --write",
+    "lint": "oxlint --deny-warnings --format agent",
+    "lint:fix": "oxlint --fix --deny-warnings --format agent",
+    "lint:pretty": "oxlint --deny-warnings",
+    "lint:pretty:fix": "oxlint --fix --deny-warnings",
+    "check": "node --run format && node --run lint && node --run typecheck && node --run test",
+    "prepack": "node --run build"
+  },
+  "dependencies": {
+    "@openai/codex-security": "0.10.0",
+    "ink": "8.0.0",
+    "react": "19.3.1",
+    "undici": "8.12.4",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "ink-testing-library": "4.0.0",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.93.0",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || ^26.0.0"
+  }
+}
