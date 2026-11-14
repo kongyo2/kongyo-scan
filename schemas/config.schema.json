@@ -1,0 +1,424 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cdn.jsdelivr.net/npm/@kongyo2/kongyo-scan/schemas/config.schema.json",
+  "title": "kongyo-scan settings",
+  "description": "Settings for kongyo-scan: model providers in fallback order, scan defaults, limits, and native Codex settings.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "providers": {
+      "description": "Model endpoints in fallback order. The first enabled provider is tried first.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "description": "Unique provider name."
+          },
+          "base_url": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Endpoint base URL up to the version segment, such as https://api.example.com/v1."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Model ID to request from this endpoint."
+          },
+          "wire_api": {
+            "description": "API the endpoint speaks: responses (POST /responses) or chat (POST /chat/completions). Default: chat.",
+            "type": "string",
+            "enum": ["responses", "chat"]
+          },
+          "api_key": {
+            "description": "API key stored in this file. Prefer api_key_env on shared machines.",
+            "type": "string",
+            "minLength": 1
+          },
+          "api_key_env": {
+            "description": "Environment variable that holds the API key. Takes precedence over api_key when set.",
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "headers": {
+            "description": "Extra request headers. Values may use {session_id} and {api_key}.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[^\\r\\n]*$"
+            }
+          },
+          "query_params": {
+            "description": "Query parameters appended to every request.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "reasoning_effort": {
+            "description": "Reasoning effort for this provider, overriding the scan effort. \"default\" sends no effort parameter.",
+            "type": "string",
+            "minLength": 1
+          },
+          "context_window": {
+            "description": "Model context window in tokens.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "max_output_tokens": {
+            "description": "Upper bound for generated tokens per request.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "timeout_seconds": {
+            "description": "Seconds to wait for the first response byte before trying the next provider (default: 180).",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "disabled": {
+            "description": "Keep the provider configured but leave it out of the chain.",
+            "type": "boolean"
+          },
+          "pricing": {
+            "type": "object",
+            "properties": {
+              "input_per_mtok": {
+                "type": "number",
+                "minimum": 0,
+                "description": "USD per 1M uncached input tokens."
+              },
+              "cached_input_per_mtok": {
+                "description": "USD per 1M cached input tokens (default: the input price).",
+                "type": "number",
+                "minimum": 0
+              },
+              "output_per_mtok": {
+                "type": "number",
+                "minimum": 0,
+                "description": "USD per 1M output tokens."
+              }
+            },
+            "required": ["input_per_mtok", "output_per_mtok"],
+            "additionalProperties": false,
+            "description": "Token prices used for cost estimates and --max-cost."
+          },
+          "compat": {
+            "type": "object",
+            "properties": {
+              "native_responses": {
+                "description": "Responses endpoints only: send requests in OpenAI's own shape, with namespaced tools, hosted tools, and agent messages unchanged (default: true for api.openai.com, false elsewhere). Other endpoints get plain function tools and plain messages.",
+                "type": "boolean"
+              },
+              "images": {
+                "description": "Send image inputs to the model (default: true). Set false for text-only models.",
+                "type": "boolean"
+              },
+              "omit_params": {
+                "description": "Top-level request body parameters to remove before sending, such as parallel_tool_calls.",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "extra_body": {
+                "description": "Extra top-level request body parameters, merged last.",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                }
+              }
+            },
+            "additionalProperties": false,
+            "description": "Compatibility switches for endpoints that reject parts of a request."
+          }
+        },
+        "required": ["name", "base_url", "model"],
+        "additionalProperties": false
+      }
+    },
+    "reasoning_effort": {
+      "description": "Reasoning effort for scans, passed through to the model (default: xhigh).",
+      "type": "string",
+      "minLength": 1
+    },
+    "scan": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "standard or deep (default: standard).",
+          "type": "string",
+          "enum": ["standard", "deep"]
+        },
+        "max_time_minutes": {
+          "description": "Investigation minutes: advisory in standard scans, enforced discovery limit in deep scans.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "paths": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": "Repository-relative files or directories."
+                }
+              },
+              "required": ["paths"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "diff": {
+                  "type": "object",
+                  "properties": {
+                    "base": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Base revision."
+                    },
+                    "head": {
+                      "description": "Head revision (default: HEAD).",
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["base"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["diff"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "working_tree": {
+                  "type": "object",
+                  "properties": {
+                    "base": {
+                      "description": "Base revision (default: HEAD).",
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "required": ["working_tree"],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Exactly one of paths, diff, or working_tree. Default: the whole repository."
+        },
+        "knowledge_base": {
+          "description": "Security-context files or directories.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "instructions_file": {
+          "description": "File with additional scan instructions.",
+          "type": "string",
+          "minLength": 1
+        },
+        "validation_file": {
+          "description": "File that replaces final validation with a custom workflow (standard scans only).",
+          "type": "string",
+          "minLength": 1
+        },
+        "post_scan_file": {
+          "description": "File with instructions to run after each scan.",
+          "type": "string",
+          "minLength": 1
+        },
+        "rubric_file": {
+          "description": "Markdown severity rubric used to grade findings.",
+          "type": "string",
+          "minLength": 1
+        },
+        "owner_suggestions": {
+          "description": "Write owner-suggestions.json after a committed Git scan (default: false).",
+          "type": "boolean"
+        },
+        "deep": {
+          "type": "object",
+          "properties": {
+            "workers": {
+              "description": "Maximum concurrent deep-scan discovery workers (default: 4).",
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "subagents_per_worker": {
+              "description": "Subagents available to each deep-scan worker; zero is valid (default: 3).",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "stop_after_no_new": {
+              "description": "Stop after this many runs find no new issues (default: 4).",
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "stop_after_consecutive_errors": {
+              "description": "Stop after this many consecutive discovery errors (default: 3).",
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "max_discovery_runs": {
+              "description": "Maximum deep-scan discovery runs (default: 40).",
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_cost_usd_per_scan": {
+          "description": "Stop a scan once its estimated cost passes this amount. Needs pricing on every provider.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "fail_on_severity": {
+          "description": "Exit with code 1 when a finding at or above this severity is reported.",
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "description": "Directory for scan artifacts, outside the scanned repository (default: kongyo-scan state).",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "codex": {
+      "description": "Native Codex settings passed to Codex Security, such as features or analytics.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "python": {
+      "description": "Python interpreter for Codex Security (default: automatic discovery).",
+      "type": "string",
+      "minLength": 1
+    },
+    "gateway": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "description": "Loopback port for the local gateway (default: 0, a free port).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "cooldown_seconds": {
+          "description": "Seconds a failing provider is skipped before it is tried again (default: 60).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "stream_idle_timeout_seconds": {
+          "description": "Seconds without a streamed event before a response is treated as lost (default: 300).",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_request_retries": {
+          "description": "Times Codex retries a request after every provider failed (default: 3).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "description": "Local gateway that relays model requests to the provider chain."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        }
+      ]
+    }
+  }
+}
