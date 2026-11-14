@@ -239,8 +239,6 @@ export const GatewaySchema = z
   })
   .describe("Local gateway that relays model requests to the provider chain.");
 
-export const SHARED_SETTING_KEYS = ["reasoning_effort", "scan", "limits", "policy"] as const;
-
 export const ConfigSchema = z.strictObject({
   $schema: z.string().optional(),
   providers: z

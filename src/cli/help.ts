@@ -14,8 +14,7 @@ function usageLine<Context>(chain: readonly CommandSpec<Context>[]): string {
     );
   }
   for (const argument of command.arguments ?? []) {
-    const name = argument.variadic ? `${argument.name}` : argument.name;
-    const text = argument.required ? `<${name}>` : `[${name}]`;
+    const text = argument.required ? `<${argument.name}>` : `[${argument.name}]`;
     parts.push(argument.variadic ? `${text}...` : text);
   }
   parts.push("[options]");

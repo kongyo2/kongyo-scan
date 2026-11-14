@@ -399,6 +399,135 @@ describe("gateway", () => {
     expect(parseSseText(result.text).at(-1)!.event).toBe("response.completed");
   });
 
+  it("counts a Responses failure after partial output against the provider", async () => {
+    const partial = (code: string, message: string) =>
+      upstream((_request, response) =>
+        sendSse(response, [
+          [
+            "response.created",
+            { type: "response.created", response: { id: "resp_x", status: "in_progress" } },
+          ],
+          [
+            "response.output_text.delta",
+            { type: "response.output_text.delta", output_index: 0, delta: "partial" },
+          ],
+          [
+            "response.failed",
+            {
+              type: "response.failed",
+              response: { id: "resp_x", status: "failed", error: { code, message } },
+            },
+          ],
+        ]),
+      );
+    const failing = await partial("server_error", "upstream exploded");
+    const healthy = await upstream(chatAnswer("from the fallback"));
+    const events: GatewayEvent[] = [];
+    const instance = await gateway(
+      [
+        provider({ name: "first", wireApi: "responses", baseUrl: failing.baseUrl }),
+        provider({ name: "second", baseUrl: healthy.baseUrl }),
+      ],
+      events,
+    );
+
+    const broken = parseSseText((await post(instance)).text);
+    expect(broken.some((item) => item.event === "response.output_text.delta")).toBe(true);
+    expect(broken.filter((item) => item.event === "response.failed")).toHaveLength(1);
+    expect(broken.at(-1)!.data["response"]).toMatchObject({
+      status: "failed",
+      error: { code: "upstream_unavailable", message: "first: upstream exploded" },
+    });
+    expect(events.find((event) => event.type === "failure")).toMatchObject({
+      committed: true,
+      failure: { provider: "first", kind: "server" },
+    });
+    expect(events.some((event) => event.type === "completed")).toBe(false);
+    expect(instance.usage().providers.find((item) => item.provider === "first")).toMatchObject({
+      requests: 0,
+      failures: 1,
+    });
+
+    expect((await post(instance)).text).toContain("from the fallback");
+    expect(failing.requests).toHaveLength(1);
+
+    const refusing = await partial("invalid_prompt", "The prompt was refused.");
+    const single = await gateway([
+      provider({ name: "only", wireApi: "responses", baseUrl: refusing.baseUrl }),
+    ]);
+    expect(parseSseText((await post(single)).text).at(-1)!.data["response"]).toMatchObject({
+      error: { code: "invalid_prompt", message: "only: The prompt was refused." },
+    });
+    expect(single.health()[0]!.coolingUntil).toBe(0);
+  });
+
+  it("moves on from an endpoint that reports an error but never finishes saying why", async () => {
+    const stalled = await upstream((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.write('{"error":{"message":"overloaded');
+    });
+    const healthy = await upstream(chatAnswer("from the fallback"));
+    const events: GatewayEvent[] = [];
+    const instance = await gateway(
+      [
+        provider({ name: "first", baseUrl: stalled.baseUrl, firstByteTimeoutMs: 250 }),
+        provider({ name: "second", baseUrl: healthy.baseUrl }),
+      ],
+      events,
+    );
+    const started = Date.now();
+    expect((await post(instance)).text).toContain("from the fallback");
+    expect(Date.now() - started).toBeLessThan(4_000);
+    expect(events.find((event) => event.type === "failure")).toMatchObject({
+      failure: { provider: "first", kind: "server", status: 503 },
+    });
+  });
+
+  it("abandons a non-streaming answer that stalls partway", async () => {
+    const stalled = await upstream((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"id":"c1","choices":[');
+    });
+    const healthy = await upstream(chatAnswer("from the fallback"));
+    const events: GatewayEvent[] = [];
+    const instance = await startGateway({
+      providers: [
+        provider({ name: "first", baseUrl: stalled.baseUrl }),
+        provider({ name: "second", baseUrl: healthy.baseUrl }),
+      ],
+      idleTimeoutMs: 250,
+      observer: (event) => events.push(event),
+    });
+    cleanup.push(() => instance.close());
+    expect((await post(instance)).text).toContain("from the fallback");
+    expect(events.find((event) => event.type === "failure")).toMatchObject({
+      failure: {
+        provider: "first",
+        kind: "timeout",
+        message: "The response stalled and was abandoned.",
+      },
+    });
+  });
+
+  it("reads a failure sent as an SSE error event", async () => {
+    const failing = await upstream((_request, response) =>
+      sendSse(response, [["error", { message: "The model is overloaded.", code: "overloaded" }]]),
+    );
+    const healthy = await upstream(chatAnswer("from the fallback"));
+    const events: GatewayEvent[] = [];
+    const instance = await gateway(
+      [
+        provider({ name: "first", baseUrl: failing.baseUrl }),
+        provider({ name: "second", baseUrl: healthy.baseUrl }),
+      ],
+      events,
+    );
+    expect((await post(instance)).text).toContain("from the fallback");
+    expect(events.find((event) => event.type === "failure")).toMatchObject({
+      failure: { provider: "first", kind: "server", message: "The model is overloaded." },
+    });
+  });
+
   it("ends a stream that breaks midway with a retryable failure", async () => {
     const dying = await upstream((_request, response) => {
       response.writeHead(200, { "content-type": "text/event-stream" });

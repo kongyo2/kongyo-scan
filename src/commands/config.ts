@@ -9,15 +9,16 @@ import { CONFIG_SCHEMA_URL } from "../config/json-schema.js";
 import {
   flattenConfig,
   getValue,
-  isSecretKey,
+  isSecretValue,
   maskSecret,
+  redact,
   settingDocs,
   setValue,
   splitKey,
   unsetValue,
 } from "../config/keys.js";
 import type { Config } from "../config/schema.js";
-import { loadConfigFile, saveConfigFile } from "../config/store.js";
+import { loadConfigFile, updateConfigFile } from "../config/store.js";
 import { CliError, isNodeError, usageError } from "../core/errors.js";
 import { displayPath } from "../core/paths.js";
 import { BIN } from "../version.js";
@@ -28,24 +29,9 @@ const JSON_OPTION = {
   description: "Output the result as JSON",
 } as const;
 
-function display(value: unknown, secret: boolean): string {
-  if (secret && typeof value === "string") return maskSecret(value);
-  if (typeof value === "string") return value;
-  return JSON.stringify(masked(value));
-}
-
-function masked(value: unknown, segments: string[] = []): unknown {
-  if (Array.isArray(value))
-    return value.map((item, index) => masked(item, [...segments, String(index)]));
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, child]) => [
-        key,
-        masked(child, [...segments, key]),
-      ]),
-    );
-  }
-  return typeof value === "string" && isSecretKey(segments) ? maskSecret(value) : value;
+function display(value: unknown, segments: readonly string[]): string {
+  const shown = redact(value, segments);
+  return typeof shown === "string" ? shown : JSON.stringify(shown);
 }
 
 function storedKeyTarget(config: Config, key: string): string | undefined {
@@ -65,12 +51,21 @@ function storedKeyTarget(config: Config, key: string): string | undefined {
   return match.name;
 }
 
+/** The provider that `providers.<name>` removes, whose stored key has to go with it. */
+function wholeProviderTarget(config: Config, key: string): string | undefined {
+  const segments = splitKey(key, config);
+  if (segments.length !== 2 || segments[0] !== "providers") return undefined;
+  return (config.providers ?? []).find(
+    (provider) => provider.name.toLowerCase() === segments[1]!.toLowerCase(),
+  )?.name;
+}
+
 async function listConfig(context: AppContext): Promise<number> {
   const { output, terminal } = context;
   const { config, exists } = await loadConfigFile(context.paths.configFile);
   if (terminal.json) {
     output.json({
-      config: masked(config) as Record<string, unknown>,
+      config: redact(config) as Record<string, unknown>,
       path: context.paths.configFile,
       exists,
     });
@@ -88,9 +83,14 @@ async function listConfig(context: AppContext): Promise<number> {
       continue;
     }
     const last = rows.findLastIndex(
-      (row) => splitKey(row.key, config)[1] === provider.name && row.key.startsWith("providers."),
+      (row) => row.segments[0] === "providers" && row.segments[1] === provider.name,
     );
-    rows.splice(last < 0 ? rows.length : last + 1, 0, { key, value: stored, secret: true });
+    rows.splice(last < 0 ? rows.length : last + 1, 0, {
+      key,
+      segments: ["providers", provider.name, "api_key"],
+      value: stored,
+      secret: true,
+    });
   }
   rows.sort(
     (a, b) => Number(a.key.startsWith("providers.")) - Number(b.key.startsWith("providers.")),
@@ -103,10 +103,10 @@ async function listConfig(context: AppContext): Promise<number> {
   if (output.out.rich) {
     output.table(
       [{ header: "Setting" }, { header: "Value", shrink: true }],
-      rows.map((row) => [row.key, display(row.value, row.secret)]),
+      rows.map((row) => [row.key, display(row.value, row.segments)]),
     );
   } else {
-    for (const row of rows) output.line(`${row.key}\t${display(row.value, row.secret)}`);
+    for (const row of rows) output.line(`${row.key}\t${display(row.value, row.segments)}`);
   }
   return 0;
 }
@@ -126,21 +126,14 @@ async function getConfig(context: AppContext, args: ParsedArgs): Promise<number>
       next: [{ label: "List the settings that are set", argv: [BIN, "config", "list"] }],
     });
   }
-  const secret = isSecretKey(splitKey(key, config));
+  const segments = splitKey(key, config);
   if (terminal.json) {
     output.json({
-      setting: {
-        key,
-        value:
-          secret && typeof value === "string"
-            ? maskSecret(value)
-            : masked(value, splitKey(key, config)),
-        secret,
-      },
+      setting: { key, value: redact(value, segments), secret: isSecretValue(segments, value) },
     });
     return 0;
   }
-  output.line(display(value, secret));
+  output.line(display(value, segments));
   return 0;
 }
 
@@ -148,17 +141,13 @@ async function setConfig(context: AppContext, args: ParsedArgs): Promise<number>
   const { output, terminal } = context;
   const key = requireArgument(args, 0, "key", `${BIN} config set`);
   const raw = requireArgument(args, 1, "value", `${BIN} config set`);
-  const { config } = await loadConfigFile(context.paths.configFile);
+  const file = context.paths.configFile;
+  const { config } = await loadConfigFile(file);
   const provider = storedKeyTarget(config, key);
   if (provider !== undefined) {
     if (raw.trim() === "") throw usageError(`Can't set ${key} to an empty value.`);
     await setProviderKey(context.paths.credentialsFile, provider, raw.trim());
-    if (getValue(config, key) !== undefined) {
-      await saveConfigFile(
-        context.paths.configFile,
-        unsetValue(config, key, context.paths.configFile).config,
-      );
-    }
+    await updateConfigFile(file, (current) => unsetValue(current, key, file).config);
     if (terminal.json)
       output.json({
         setting: { key, value: maskSecret(raw.trim()), secret: true },
@@ -172,24 +161,18 @@ async function setConfig(context: AppContext, args: ParsedArgs): Promise<number>
     }
     return 0;
   }
-  const next: Config = setValue(config, key, raw, context.paths.configFile);
-  await saveConfigFile(context.paths.configFile, next);
+  const next = await updateConfigFile(file, (current) => setValue(current, key, raw, file));
   const segments = splitKey(key, next);
   const value = getValue(next, key);
-  const secret = isSecretKey(segments);
   if (terminal.json) {
     output.json({
-      setting: {
-        key,
-        value: secret && typeof value === "string" ? maskSecret(value) : masked(value, segments),
-        secret,
-      },
+      setting: { key, value: redact(value, segments), secret: isSecretValue(segments, value) },
       outcome: "set",
     });
     return 0;
   }
   output.success("Set", key);
-  output.row("Value", display(value, secret));
+  output.row("Value", display(value, segments));
   if (!terminal.stdout.isTTY) output.line(key);
   return 0;
 }
@@ -197,17 +180,22 @@ async function setConfig(context: AppContext, args: ParsedArgs): Promise<number>
 async function unsetConfig(context: AppContext, args: ParsedArgs): Promise<number> {
   const { output, terminal } = context;
   const key = requireArgument(args, 0, "key", `${BIN} config unset`);
-  const { config } = await loadConfigFile(context.paths.configFile);
-  const provider = storedKeyTarget(config, key);
-  const result = unsetValue(config, key, context.paths.configFile);
-  if (result.changed) await saveConfigFile(context.paths.configFile, result.config);
+  const file = context.paths.configFile;
+  const { config } = await loadConfigFile(file);
+  const provider = storedKeyTarget(config, key) ?? wholeProviderTarget(config, key);
+  let changed = false;
+  await updateConfigFile(file, (current) => {
+    const result = unsetValue(current, key, file);
+    changed = result.changed;
+    return result.config;
+  });
   if (provider !== undefined && (await deleteProviderKey(context.paths.credentialsFile, provider)))
-    result.changed = true;
+    changed = true;
   if (terminal.json) {
-    output.json({ setting: { key }, outcome: result.changed ? "unset" : "unchanged" });
+    output.json({ setting: { key }, outcome: changed ? "unset" : "unchanged" });
     return 0;
   }
-  if (result.changed) output.success("Unset", key);
+  if (changed) output.success("Unset", key);
   else output.info(`  ${key} is not set.`);
   if (!terminal.stdout.isTTY) output.line(key);
   return 0;

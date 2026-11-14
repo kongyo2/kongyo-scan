@@ -11,7 +11,7 @@ import { keyLabel } from "../commands/providers.js";
 import { deleteProviderKey, type StoredKeys } from "../config/credentials.js";
 import { getValue, setValue, unsetValue } from "../config/keys.js";
 import { type Config, DEFAULT_REASONING_EFFORT, type ProviderConfig } from "../config/schema.js";
-import { loadConfigFile, saveConfigFile, updateConfigFile } from "../config/store.js";
+import { updateConfigFile } from "../config/store.js";
 import { CanceledError, CliError, describeError } from "../core/errors.js";
 import { displayPath } from "../core/paths.js";
 import { type CheckResult, checkProvider } from "../providers/check.js";
@@ -902,12 +902,12 @@ function Settings(props: {
     setProblem(undefined);
     void (async () => {
       try {
-        const { config } = await loadConfigFile(context.paths.configFile);
-        const next =
+        const file = context.paths.configFile;
+        await updateConfigFile(file, (config) =>
           raw.trim() === ""
-            ? unsetValue(config, field.key, context.paths.configFile).config
-            : setValue(config, field.key, raw.trim(), context.paths.configFile);
-        await saveConfigFile(context.paths.configFile, next);
+            ? unsetValue(config, field.key, file).config
+            : setValue(config, field.key, raw.trim(), file),
+        );
         await props.reload();
         setMessage(
           raw.trim() === ""

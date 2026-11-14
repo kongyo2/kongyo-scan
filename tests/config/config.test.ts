@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,7 +13,9 @@ import {
 import {
   flattenConfig,
   getValue,
+  isSecretValue,
   maskSecret,
+  redact,
   settingDocs,
   setValue,
   splitKey,
@@ -161,7 +163,6 @@ describe("config store", () => {
     await saveConfigFile(file, sample);
     expect((await stat(file)).mode & 0o777).toBe(0o600);
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual(sample);
-    const { readdir } = await import("node:fs/promises");
     expect(await readdir(directory)).toEqual(["config.json"]);
   });
 
@@ -174,9 +175,10 @@ describe("config store", () => {
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual(sample);
   });
 
-  it("re-reads before changing so concurrent edits are not lost", async () => {
+  it("applies changes made at the same time one after another, losing none", async () => {
     const file = join(directory, "config.json");
     await saveConfigFile(file, sample);
+    const names = Array.from({ length: 12 }, (_, index) => `added-${index}`);
     await Promise.all([
       updateConfigFile(file, (config) => {
         config.reasoning_effort = "high";
@@ -184,9 +186,54 @@ describe("config store", () => {
       updateConfigFile(file, (config) => {
         config.policy = { fail_on_severity: "high" };
       }),
+      ...names.map((name) =>
+        updateConfigFile(file, (config) => {
+          config.providers = [
+            ...(config.providers ?? []),
+            { name, base_url: "https://api.example.com/v1", model: "m" },
+          ];
+        }),
+      ),
     ]);
     const { config } = await loadConfigFile(file);
-    expect(config.providers).toHaveLength(2);
+    expect(config.reasoning_effort).toBe("high");
+    expect(config.policy).toEqual({ fail_on_severity: "high" });
+    expect(config.providers?.map((provider) => provider.name).sort()).toEqual(
+      ["primary", "back.up", ...names].sort(),
+    );
+    expect(await readdir(directory)).toEqual(["config.json"]);
+  });
+
+  it("writes nothing when a change leaves the settings as they were", async () => {
+    const file = join(directory, "config.json");
+    expect(await updateConfigFile(file, () => undefined)).toEqual({});
+    expect(await readdir(directory)).toEqual([]);
+    await saveConfigFile(file, sample);
+    const before = (await stat(file)).mtimeMs;
+    await updateConfigFile(file, (config) => {
+      config.reasoning_effort = "max";
+    });
+    expect((await stat(file)).mtimeMs).toBe(before);
+  });
+
+  it("takes over a lock left by a process that died and releases its own on failure", async () => {
+    const file = join(directory, "config.json");
+    await saveConfigFile(file, sample);
+    const lock = `${file}.lock`;
+    await writeFile(lock, "", "utf8");
+    const longAgo = new Date(Date.now() - 5 * 60_000);
+    await utimes(lock, longAgo, longAgo);
+    await updateConfigFile(file, (config) => {
+      config.reasoning_effort = "low";
+    });
+    expect((await loadConfigFile(file)).config.reasoning_effort).toBe("low");
+
+    await expect(
+      updateConfigFile(file, () => {
+        throw new Error("change failed");
+      }),
+    ).rejects.toThrow("change failed");
+    expect(await readdir(directory)).toEqual(["config.json"]);
   });
 });
 
@@ -263,6 +310,89 @@ describe("setting names", () => {
     expect(rows.find((row) => row.key === "providers.p.api_key")).toMatchObject({ secret: true });
     expect(maskSecret("sk-1234567890abcdef")).toBe("****cdef");
     expect(maskSecret("short")).toBe("****");
+  });
+
+  it("recognizes credentials by the name of the setting that holds them", () => {
+    const secret = (key: string, value = "literal-credential-value"): boolean =>
+      isSecretValue(key.split("/"), value);
+    for (const key of [
+      "providers/p/api_key",
+      "providers/p/headers/Authorization",
+      "providers/p/headers/Proxy-Authorization",
+      "providers/p/headers/x-api-key",
+      "providers/p/headers/X-Goog-Api-Key",
+      "providers/p/headers/Ocp-Apim-Subscription-Key",
+      "providers/p/headers/x-auth-token",
+      "providers/p/headers/Cookie",
+      "providers/p/query_params/key",
+      "providers/p/query_params/access_token",
+      "providers/p/query_params/signature",
+      "codex/mcp_servers/tracker/env/TRACKER_API_TOKEN",
+      "codex/mcp_servers/tracker/bearer_token",
+      "codex/some/client_secret",
+    ]) {
+      expect(secret(key), key).toBe(true);
+    }
+    for (const key of [
+      "providers/p/model",
+      "providers/p/api_key_env",
+      "providers/p/max_output_tokens",
+      "providers/p/headers/x-opencode-session",
+      "providers/p/headers/HTTP-Referer",
+      "providers/p/query_params/api-version",
+      "providers/token",
+      "reasoning_effort",
+    ]) {
+      expect(secret(key), key).toBe(false);
+    }
+    expect(secret("providers/p/headers/Authorization", "Bearer {api_key}")).toBe(false);
+    expect(secret("providers/p/headers/x-api-key", "{api_key}")).toBe(false);
+    expect(secret("providers/p/headers/x-session-token", "{session_id}")).toBe(false);
+    expect(secret("providers/p/headers/Authorization", "Bearer sk-live-1234 {api_key}")).toBe(true);
+  });
+
+  it("masks credentials wherever they sit in a value being shown", () => {
+    const headers = {
+      Authorization: "Bearer sk-live-0123456789abcdef",
+      "x-opencode-session": "{session_id}",
+      "x-api-key": "{api_key}",
+    };
+    expect(redact(headers, ["providers", "p", "headers"])).toEqual({
+      Authorization: "****cdef",
+      "x-opencode-session": "{session_id}",
+      "x-api-key": "{api_key}",
+    });
+    expect(
+      redact({
+        providers: [
+          {
+            name: "p",
+            base_url: "https://a.example/v1",
+            model: "m",
+            api_key: "sk-1234567890abcdef",
+            headers,
+            query_params: { key: "AIza-0123456789abcdef", "api-version": "2026-01-01" },
+          },
+        ],
+        codex: { mcp_servers: { tracker: { env: { TRACKER_TOKEN: "tok-0123456789abcdef" } } } },
+      }),
+    ).toEqual({
+      providers: [
+        {
+          name: "p",
+          base_url: "https://a.example/v1",
+          model: "m",
+          api_key: "****cdef",
+          headers: {
+            Authorization: "****cdef",
+            "x-opencode-session": "{session_id}",
+            "x-api-key": "{api_key}",
+          },
+          query_params: { key: "****cdef", "api-version": "2026-01-01" },
+        },
+      ],
+      codex: { mcp_servers: { tracker: { env: { TRACKER_TOKEN: "****cdef" } } } },
+    });
   });
 });
 

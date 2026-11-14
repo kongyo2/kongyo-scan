@@ -4,6 +4,9 @@ import { userAgent } from "../version.js";
 import { classifyHttpFailure, classifyTransportFailure, protocolFailure } from "./failure.js";
 import { type ResolvedProvider, UpstreamError } from "./types.js";
 
+const ERROR_BODY_LIMIT_BYTES = 64 * 1024;
+const ERROR_BODY_TIMEOUT_MS = 10_000;
+
 let sharedDispatcher: Dispatcher | undefined;
 
 export function upstreamDispatcher(): Dispatcher {
@@ -68,7 +71,6 @@ export function buildHeaders(
 export interface UpstreamResponse {
   response: Response;
   abort(): void;
-  timedOut(): boolean;
   body(idleTimeoutMs: number): AsyncGenerator<Uint8Array, void, undefined>;
 }
 
@@ -111,7 +113,11 @@ export async function postUpstream(
   clearTimeout(timer);
 
   if (!response.ok) {
-    const text = await readText(response, 64 * 1024).catch(() => "");
+    const text = await readErrorText(
+      response,
+      controller,
+      Math.min(ERROR_BODY_TIMEOUT_MS, provider.firstByteTimeoutMs),
+    );
     release();
     controller.abort();
     throw new UpstreamError(
@@ -130,7 +136,6 @@ export async function postUpstream(
       release();
       controller.abort();
     },
-    timedOut: () => timedOut,
     async *body(idleTimeoutMs: number) {
       const stream = response.body;
       if (stream === null) {
@@ -166,15 +171,38 @@ export async function postUpstream(
   };
 }
 
-export async function readText(response: Response, limit: number): Promise<string> {
+export async function readText(body: AsyncIterable<Uint8Array>, limit: number): Promise<string> {
+  const decoder = new TextDecoder("utf-8");
+  let text = "";
+  let size = 0;
+  for await (const chunk of body) {
+    size += chunk.byteLength;
+    text += decoder.decode(chunk, { stream: true });
+    if (size >= limit) break;
+  }
+  return text + decoder.decode();
+}
+
+async function readErrorText(
+  response: Response,
+  controller: AbortController,
+  timeoutMs: number,
+): Promise<string> {
   if (response.body === null) return "";
   const decoder = new TextDecoder("utf-8");
   let text = "";
   let size = 0;
-  for await (const chunk of response.body) {
-    size += chunk.byteLength;
-    text += decoder.decode(chunk, { stream: true });
-    if (size >= limit) break;
+  const timer = setTimeout(() => controller.abort(new Error("error body timeout")), timeoutMs);
+  try {
+    for await (const chunk of response.body) {
+      size += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+      if (size >= ERROR_BODY_LIMIT_BYTES) break;
+    }
+  } catch {
+    // The status already says the request failed; a body that stalls or breaks adds nothing.
+  } finally {
+    clearTimeout(timer);
   }
   return text + decoder.decode();
 }

@@ -3,6 +3,7 @@ import { chmod, lstat, mkdir, open, readFile, realpath, rename, unlink } from "n
 import { dirname, join } from "node:path";
 
 import { CliError, configError, isNodeError, type Issue } from "../core/errors.js";
+import { withFileLock } from "../core/lock.js";
 import { type Config, ConfigSchema, emptyConfig, formatIssues } from "./schema.js";
 
 export interface LoadedConfig {
@@ -27,7 +28,7 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 }
 
 export function parseConfigText(text: string, path: string): Config {
-  const source = text.replace(/^﻿/u, "");
+  const source = text.replace(/^\uFEFF/u, "");
   let raw: unknown;
   try {
     raw = source.trim() === "" ? {} : JSON.parse(source);
@@ -110,7 +111,7 @@ function maskValues(line: string): string {
   return line.replaceAll(/(:\s*)"(?:[^"\\]|\\.)*"/gu, '$1"…"');
 }
 
-export function serializeConfig(config: Config): string {
+function serializeConfig(config: Config): string {
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
@@ -160,13 +161,19 @@ async function resolveWriteTarget(path: string): Promise<string> {
   return path;
 }
 
+/**
+ * Applies one change to the settings file. The file is locked and read again first, so a change
+ * made by another process in the meantime is kept. Nothing is written when nothing changed.
+ */
 export async function updateConfigFile(
   path: string,
   change: (config: Config) => Config | void,
 ): Promise<Config> {
-  const { config } = await loadConfigFile(path);
-  const draft = structuredClone(config);
-  const next = change(draft) ?? draft;
-  await saveConfigFile(path, next);
-  return next;
+  return await withFileLock(path, async () => {
+    const { config } = await loadConfigFile(path);
+    const draft = structuredClone(config);
+    const next = change(draft) ?? draft;
+    if (serializeConfig(next) !== serializeConfig(config)) await saveConfigFile(path, next);
+    return next;
+  });
 }

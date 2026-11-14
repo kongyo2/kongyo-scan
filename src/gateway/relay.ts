@@ -19,10 +19,6 @@ export class Relay {
     return this.#committed;
   }
 
-  get ended(): boolean {
-    return this.#ended;
-  }
-
   write(event: string, data: Record<string, unknown>): void {
     if (this.#ended) return;
     const frame = formatSse(event, data);

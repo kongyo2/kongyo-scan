@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -267,6 +267,96 @@ describe("providers", () => {
     expect(shown.stdout).not.toContain(SECRET);
     expect(shown.stdout).toContain("providers.local.api_key\t****CRET");
     expect((await cli(["config", "get", "providers.local.api_key"])).stdout).toBe("****CRET\n");
+  });
+
+  it("never shows a credential kept in a header or query parameter", async () => {
+    await addProvider("local", [
+      "--header",
+      "X-Api-Key=header-0123456789SECRET,x-trace={session_id}",
+    ]);
+    const settings = join(home, "config.json");
+    const config = JSON.parse(await readFile(settings, "utf8")) as {
+      providers: Record<string, unknown>[];
+    };
+    config.providers[0]!["query_params"] = { key: "query-0123456789SECRET", "api-version": "1" };
+    await writeFile(settings, JSON.stringify(config), "utf8");
+
+    const leaked = (text: string): boolean => /0123456789SECRET/u.test(text);
+    const headers = await cli(["config", "get", "providers.local.headers"]);
+    expect(headers.stdout).toBe('{"X-Api-Key":"****CRET","x-trace":"{session_id}"}\n');
+    const asJson = await cli(["config", "get", "providers.local.headers", "--json"]);
+    expect(parseJson(asJson.stdout)["setting"]["value"]).toEqual({
+      "X-Api-Key": "****CRET",
+      "x-trace": "{session_id}",
+    });
+    const whole = await cli(["config", "get", "providers.local"]);
+    const listed = await cli(["config", "list"]);
+    const listedJson = await cli(["config", "list", "--json"]);
+    for (const result of [headers, asJson, whole, listed, listedJson]) {
+      expect(result.code).toBe(0);
+      expect(leaked(result.stdout + result.stderr)).toBe(false);
+    }
+    expect(listed.stdout).toContain("providers.local.query_params.key\t****CRET");
+    expect(listed.stdout).toContain("providers.local.query_params.api-version\t1");
+    expect((await cli(["config", "get", "providers.local.query_params.key"])).stdout).toBe(
+      "****CRET\n",
+    );
+  });
+
+  it("never hands a key stored under a name to a new provider with that name", async () => {
+    await addProvider("reused");
+    const credentials = join(home, "state", "codex-home", "kongyo-scan-credentials.json");
+    expect(await readFile(credentials, "utf8")).toContain(SECRET);
+    await writeFile(join(home, "config.json"), "{}", "utf8");
+
+    const other = await fakeUpstream((_request, response) => {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "Invalid API key." } }));
+    });
+    try {
+      const checked = await cli([
+        "providers",
+        "add",
+        "reused",
+        "--base-url",
+        other.baseUrl,
+        "--model",
+        "m",
+        "--wire-api",
+        "chat",
+        "--json",
+      ]);
+      expect(checked.code).toBe(1);
+      expect(other.requests).toHaveLength(1);
+      expect(other.requests[0]!.headers["authorization"]).toBeUndefined();
+
+      const added = await cli([
+        "providers",
+        "add",
+        "reused",
+        "--base-url",
+        other.baseUrl,
+        "--model",
+        "m",
+        "--wire-api",
+        "chat",
+        "--no-check",
+        "--json",
+      ]);
+      expect(parseJson(added.stdout)["provider"]["key"]).toEqual({ source: "none", env: null });
+      expect(await readFile(credentials, "utf8")).not.toContain(SECRET);
+    } finally {
+      await other.close();
+    }
+
+    await addProvider("temporary");
+    expect(await readFile(credentials, "utf8")).toContain(SECRET);
+    expect(
+      parseJson((await cli(["config", "unset", "providers.temporary", "--json"])).stdout)[
+        "outcome"
+      ],
+    ).toBe("unset");
+    expect(await readFile(credentials, "utf8")).not.toContain(SECRET);
   });
 
   it("saves nothing when the check fails", async () => {
@@ -777,5 +867,9 @@ describe("scan planning", () => {
     const missing = await cli(["scan", "--dry-run", "--config", "nope.json", "--json"]);
     expect(missing.code).toBe(1);
     expect(parseJson(missing.stderr)["reason"]).toBe("not_found");
+
+    const literal = await cli(["scan", "--dry-run", "--json", "--", work], { cwd: home });
+    expect(literal.code).toBe(0);
+    expect([work, await realpath(work)]).toContain(parseJson(literal.stdout)["scan"]["repository"]);
   }, 120_000);
 });

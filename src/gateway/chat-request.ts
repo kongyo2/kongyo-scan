@@ -105,7 +105,7 @@ export function resolveEffort(
   return requested === EFFORT_PROVIDER_DEFAULT ? undefined : requested;
 }
 
-function maxOutputTokens(
+export function maxOutputTokens(
   request: ResponsesRequest,
   provider: ResolvedProvider,
 ): number | undefined {
