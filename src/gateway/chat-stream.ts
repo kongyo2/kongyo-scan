@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { encodeReasoningTag } from "./tags.js";
-import { argumentsToCustomInput, isRecord, type ToolNames } from "./tools.js";
+import { argumentsToCustomInput, isRecord, normalizeArguments, type ToolNames } from "./tools.js";
 import type { TokenUsage } from "./types.js";
 
 export type ResponseEventSink = (event: string, data: Record<string, unknown>) => void;
@@ -539,7 +539,7 @@ export class ChatStreamTranslator {
       name: identity.name,
       ...namespace,
       call_id: state.callId,
-      arguments: argumentsText,
+      arguments: status === "completed" ? normalizeArguments(argumentsText) : argumentsText,
     };
   }
 
@@ -561,7 +561,7 @@ export class ChatStreamTranslator {
         this.#emit("response.function_call_arguments.done", {
           item_id: state.itemId,
           output_index: state.outputIndex,
-          arguments: argumentsText,
+          arguments: item["arguments"],
         });
       }
       this.#output.push(item);

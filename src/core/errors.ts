@@ -169,3 +169,10 @@ export function sanitizeLine(text: string): string {
     .replaceAll(/\s{2,}/gu, " ")
     .trim();
 }
+
+/** Removes what could drive a terminal from text that keeps its line breaks. */
+export function sanitizeText(text: string): string {
+  return text
+    .replaceAll(/\r\n?/gu, "\n")
+    .replaceAll(/(?![\t\n])\p{Cc}|[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/gu, "");
+}

@@ -79,6 +79,45 @@ describe("finding summaries", () => {
     expect(summarizeFindings(null)).toEqual([]);
   });
 
+  it("keeps control characters in finding text away from the terminal", () => {
+    const escape = "\u001b";
+    const [finding] = summarizeFindings({
+      findings: [
+        {
+          findingId: `csf${escape}[2J_1`,
+          title: "Injection",
+          severity: { level: "high" },
+          confidence: { level: `high${escape}[1m` },
+          locations: [{ path: `src/a  b${escape}[2J.ts`, startLine: 3 }],
+          taxonomy: { category: `sqli${escape}]0;owned\u0007`, cwe: [`CWE-89${escape}[5m`, 7] },
+          summary: `First line.${escape}[2J${escape}[H\r\nSecond ‮line\u0007.\n\tIndented.`,
+          rootCause: { summary: `Root${escape}[1A cause` },
+          remediation: `Fix${escape}c it`,
+          validation: { summary: "Checked\u0008\u0008" },
+          codeEvidence: [
+            {
+              path: `src/a${escape}.ts`,
+              label: `sink${escape}[5m`,
+              code: `run(x)${escape}[8m\n  hidden()`,
+            },
+          ],
+        },
+      ],
+    });
+    expect(finding).toMatchObject({
+      id: "csf[2J_1",
+      confidence: "high[1m",
+      path: "src/a  b[2J.ts",
+      category: "sqli]0;owned",
+      cwe: ["CWE-89[5m"],
+      summary: "First line.[2J[H\nSecond line.\n\tIndented.",
+      rootCause: "Root[1A cause",
+      remediation: "Fixc it",
+      validation: "Checked",
+      evidence: [{ path: "src/a.ts", label: "sink[5m", code: "run(x)[8m\n  hidden()" }],
+    });
+  });
+
   it("counts and formats severities", () => {
     const counts = countSeverities(summarizeFindings(DOCUMENT));
     expect(counts).toEqual({ critical: 0, high: 1, medium: 0, low: 1, informational: 1 });

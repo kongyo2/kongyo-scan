@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { FAIL_SEVERITIES, type FailSeverity } from "../config/schema.js";
-import { sanitizeLine } from "../core/errors.js";
+import { sanitizeLine, sanitizeText } from "../core/errors.js";
 
 export const SEVERITIES = ["critical", "high", "medium", "low", "informational"] as const;
 export type Severity = (typeof SEVERITIES)[number];
@@ -37,8 +37,21 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+// Finding text is written by the model from the scanned repository, so it reaches the
+// terminal only without control characters.
+function line(value: unknown): string | undefined {
+  const cleaned = typeof value === "string" ? sanitizeLine(value) : "";
+  return cleaned === "" ? undefined : cleaned;
+}
+
 function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+  const cleaned = typeof value === "string" ? sanitizeText(value) : "";
+  return cleaned.trim() === "" ? undefined : cleaned;
+}
+
+// A path keeps its spaces as they are, which sanitizeLine would collapse.
+function filePath(value: unknown): string | undefined {
+  return text(value)?.replaceAll("\n", " ");
 }
 
 function integer(value: unknown): number | undefined {
@@ -59,16 +72,16 @@ export function summarizeFinding(raw: unknown, index: number): FindingSummary {
   const primary = record(locations[0]);
   const evidence = Array.isArray(finding["codeEvidence"]) ? finding["codeEvidence"] : [];
   return {
-    id: text(finding["findingId"]) ?? text(finding["occurrenceId"]) ?? `finding-${index + 1}`,
-    title: sanitizeLine(text(finding["title"]) ?? "Untitled finding"),
+    id: line(finding["findingId"]) ?? line(finding["occurrenceId"]) ?? `finding-${index + 1}`,
+    title: line(finding["title"]) ?? "Untitled finding",
     severity: normalizeSeverity(severity?.["level"]),
-    confidence: text(confidence?.["level"]),
-    path: text(primary?.["path"]),
+    confidence: line(confidence?.["level"]),
+    path: filePath(primary?.["path"]),
     startLine: integer(primary?.["startLine"]),
     endLine: integer(primary?.["endLine"]),
-    category: text(taxonomy?.["category"]),
+    category: line(taxonomy?.["category"]),
     cwe: Array.isArray(taxonomy?.["cwe"])
-      ? taxonomy["cwe"].filter((item): item is string => typeof item === "string")
+      ? taxonomy["cwe"].flatMap((item) => line(item) ?? [])
       : [],
     summary: text(finding["summary"]) ?? "",
     rootCause: text(record(finding["rootCause"])?.["summary"]),
@@ -76,13 +89,13 @@ export function summarizeFinding(raw: unknown, index: number): FindingSummary {
     validation: text(record(finding["validation"])?.["summary"]),
     evidence: evidence.flatMap((entry) => {
       const item = record(entry);
-      const path = text(item?.["path"]);
+      const path = filePath(item?.["path"]);
       if (!item || path === undefined) return [];
       return [
         {
           path,
           startLine: integer(item["startLine"]),
-          label: text(item["label"]),
+          label: line(item["label"]),
           code: text(item["code"]),
         },
       ];

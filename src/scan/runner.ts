@@ -159,7 +159,7 @@ function gatewayProviders(plan: ScanPlan): ResolvedProvider[] {
   );
 }
 
-function codexOverrides(plan: ScanPlan, baseUrl: string): JsonObject {
+export function codexOverrides(plan: ScanPlan, baseUrl: string): JsonObject {
   const firstByteBudget = plan.chain.reduce(
     (total, provider) => total + provider.firstByteTimeoutMs,
     0,
@@ -175,7 +175,10 @@ function codexOverrides(plan: ScanPlan, baseUrl: string): JsonObject {
         base_url: baseUrl,
         env_key: GATEWAY_TOKEN_ENV,
         wire_api: "responses",
+        // The gateway reports a failed chain inside the response stream, which Codex counts
+        // against stream_max_retries; request_max_retries only covers reaching the gateway.
         request_max_retries: plan.gateway.maxRequestRetries,
+        stream_max_retries: plan.gateway.maxRequestRetries,
         stream_idle_timeout_ms: firstByteBudget + plan.gateway.idleTimeoutMs + 30_000,
       },
     },

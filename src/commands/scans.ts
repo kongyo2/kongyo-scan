@@ -19,7 +19,7 @@ import {
 } from "../cli/format.js";
 import type { Output } from "../cli/output.js";
 import { wrapText } from "../cli/theme.js";
-import { CliError, isNodeError, usageError } from "../core/errors.js";
+import { CliError, isNodeError, sanitizeText, usageError } from "../core/errors.js";
 import {
   describeTarget,
   findScan,
@@ -285,8 +285,13 @@ async function reportScan(context: AppContext, args: ParsedArgs): Promise<number
     });
   }
   if (terminal.json) output.json({ report: { scanId: record.scanId, path, markdown: text } });
-  else output.write(text.endsWith("\n") ? text : `${text}\n`);
+  else output.write(forStdout(context, text.endsWith("\n") ? text : `${text}\n`));
   return 0;
+}
+
+// A terminal gets saved results without control characters; a pipe gets them as saved.
+function forStdout(context: AppContext, text: string): string {
+  return context.terminal.stdout.isTTY ? sanitizeText(text) : text;
 }
 
 const EXPORT_FORMATS = ["sarif", "json", "markdown", "csv", "threat-model"] as const;
@@ -360,7 +365,7 @@ async function exportScan(context: AppContext, args: ParsedArgs): Promise<number
 
   try {
     if (target === undefined) {
-      output.write(content ?? (await readFile(source!, "utf8")));
+      output.write(forStdout(context, content ?? (await readFile(source!, "utf8"))));
       return 0;
     }
     if (content !== undefined)

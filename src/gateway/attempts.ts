@@ -16,6 +16,7 @@ import {
   customInputToArguments,
   flattenTools,
   isRecord,
+  normalizeArguments,
   type ToolNames,
 } from "./tools.js";
 import type { TurnGuard } from "./turn-guard.js";
@@ -168,6 +169,8 @@ async function runResponsesAttempt(context: AttemptContext): Promise<AttemptResu
       );
     }
     if (typeof event["delta"] === "string") outputCharacters += event["delta"].length;
+    if (type === "response.function_call_arguments.done" && typeof event["arguments"] === "string")
+      event["arguments"] = normalizeArguments(event["arguments"]);
     if (type === "response.output_item.done" && isRecord(event["item"]))
       finished.push(event["item"]);
     if (type === "response.completed" || type === "response.incomplete") {
@@ -441,6 +444,18 @@ function prepareInputItem(
 }
 
 function restoreItem(
+  item: Record<string, unknown>,
+  provider: ResolvedProvider,
+  names: ToolNames | null,
+  aliases: NamespaceAliases,
+): Record<string, unknown> {
+  const restored = restoreIdentity(item, provider, names, aliases);
+  return restored["type"] === "function_call" && typeof restored["arguments"] === "string"
+    ? { ...restored, arguments: normalizeArguments(restored["arguments"]) }
+    : restored;
+}
+
+function restoreIdentity(
   item: Record<string, unknown>,
   provider: ResolvedProvider,
   names: ToolNames | null,
