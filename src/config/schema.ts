@@ -235,7 +235,9 @@ export const GatewaySchema = z
       ),
     max_request_retries: nonNegativeInteger
       .optional()
-      .describe("Times Codex retries a request after every provider failed (default: 3)."),
+      .describe(
+        "Times Codex retries a model request after every provider failed, waiting longer before each try (default: 5).",
+      ),
   })
   .describe("Local gateway that relays model requests to the provider chain.");
 

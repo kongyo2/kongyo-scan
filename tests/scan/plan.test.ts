@@ -64,7 +64,7 @@ describe("resolveScanPlan", () => {
       port: 0,
       cooldownMs: 60_000,
       idleTimeoutMs: 300_000,
-      maxRequestRetries: 3,
+      maxRequestRetries: 5,
     });
   });
 

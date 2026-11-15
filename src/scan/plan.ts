@@ -414,7 +414,7 @@ export function resolveScanPlan(inputs: PlanInputs): ScanPlan {
       port: config.gateway?.port ?? 0,
       cooldownMs: (config.gateway?.cooldown_seconds ?? 60) * 1000,
       idleTimeoutMs: (config.gateway?.stream_idle_timeout_seconds ?? 300) * 1000,
-      maxRequestRetries: config.gateway?.max_request_retries ?? 3,
+      maxRequestRetries: config.gateway?.max_request_retries ?? 5,
     },
   };
 }

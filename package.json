@@ -1,6 +1,6 @@
 {
   "name": "@kongyo2/kongyo-scan",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local security scans powered by Codex Security on any OpenAI-compatible LLM endpoint, with provider fallback and an interactive TUI",
   "keywords": [
     "cli",

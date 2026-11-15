@@ -130,20 +130,23 @@ const PHASE_LABELS: Record<ScanPhase, string> = {
 
 const PHASE_ORDER: readonly ScanPhase[] = ["threat_model", "discovery", "validation", "reporting"];
 
-export function statusLine(state: ScanViewState): string {
+// A deep scan reports its reviews and never moves through the phases of a single review.
+export function statusLine(state: ScanViewState, mode: ScanPlan["mode"] = "standard"): string {
   if (state.stage === "preparing") return "Preparing the scan";
   if (state.stage === "starting") return "Starting Codex Security";
   if (state.stage === "finishing") return "Saving the results";
   if (state.deep?.consolidating) return "Combining results";
-  if (state.phase === undefined) return "Starting the scan";
+  if (state.deep) return "Reviewing the code";
+  if (state.phase === undefined || mode === "deep") return "Starting the scan";
   return PHASE_LABELS[state.phase];
 }
 
-function progressDetail(state: ScanViewState): string {
+function progressDetail(state: ScanViewState, mode: ScanPlan["mode"]): string {
   if (state.stage !== "scanning") return "";
   if (state.deep) {
     return `${state.deep.completed} of up to ${state.deep.maximum} reviews done, ${state.deep.active} running`;
   }
+  if (mode === "deep") return "";
   if (state.reviewItems && state.reviewItems.total > 0) {
     return `${state.reviewItems.completed}/${state.reviewItems.total} reviews`;
   }
@@ -180,7 +183,7 @@ export interface ScanViewProps {
 export function ScanView(props: ScanViewProps): ReactNode {
   const { plan, state } = props;
   const elapsed = useElapsed(props.startedAt);
-  const detail = progressDetail(state);
+  const detail = progressDetail(state, plan.mode);
   const provider = state.provider ?? { name: plan.chain[0]!.name, model: plan.chain[0]!.model };
   const fallbacks = plan.chain.length - 1;
   const usage = state.usage;
@@ -199,10 +202,10 @@ export function ScanView(props: ScanViewProps): ReactNode {
       </Box>
       <Box marginTop={1}>
         <Spinner />
-        <Text bold> {statusLine(state)}…</Text>
+        <Text bold> {statusLine(state, plan.mode)}…</Text>
         {detail ? <Faint>{`  ${detail}`}</Faint> : null}
       </Box>
-      <Box>
+      <Box display={plan.mode === "deep" ? "none" : "flex"}>
         <Text>{"  "}</Text>
         {PHASE_ORDER.map((phase, index) => {
           const current =

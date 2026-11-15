@@ -159,6 +159,36 @@ describe("scan view state", () => {
     );
     expect(statusLine(state)).toBe("Combining results");
   });
+
+  it("follows a deep scan by its reviews, which report no phases", () => {
+    let state = fold([
+      { type: "stage", stage: "scanning" },
+      {
+        type: "progress",
+        phase: "preflight",
+        filesCompleted: 0,
+        filesTotal: 12,
+        reviewItems: undefined,
+      },
+    ]);
+    expect(statusLine(state)).toBe("Checking inputs");
+    expect(statusLine(state, "deep")).toBe("Starting the scan");
+    state = fold(
+      [{ type: "deep_progress", completed: 3, active: 4, maximum: 40, consolidating: false }],
+      state,
+    );
+    expect(statusLine(state, "deep")).toBe("Reviewing the code");
+    state = fold(
+      [{ type: "deep_progress", completed: 4, active: 0, maximum: 40, consolidating: true }],
+      state,
+    );
+    expect(statusLine(state, "deep")).toBe("Combining results");
+    state = fold(
+      [{ type: "deep_progress", completed: 4, active: 4, maximum: 40, consolidating: false }],
+      state,
+    );
+    expect(statusLine(state, "deep")).toBe("Reviewing the code");
+  });
 });
 
 describe("scan view", () => {
@@ -221,6 +251,38 @@ describe("scan view", () => {
     expect(frame).toContain("Preparing the scan…");
     expect(frame).toContain("main · model-a · effort max  (+1 fallback)");
     expect(frame).toContain("waiting for the first response");
+  });
+
+  it("shows a deep scan's reviews in place of the phases of a single review", () => {
+    const deep = resolveScanPlan({ cli: { mode: "deep" }, config, cwd: "/work/my-repo", env: {} });
+    const started = fold([
+      { type: "stage", stage: "scanning" },
+      {
+        type: "progress",
+        phase: "preflight",
+        filesCompleted: 0,
+        filesTotal: 12,
+        reviewItems: undefined,
+      },
+    ]);
+    const before = render(
+      <ScanView plan={deep} state={started} startedAt={Date.now()} columns={90} />,
+    );
+    expect(before.lastFrame()).toContain("Starting the scan…");
+    expect(before.lastFrame()).not.toMatch(/Checking inputs|Building the threat model|12 files/u);
+    before.unmount();
+
+    const running = fold(
+      [{ type: "deep_progress", completed: 3, active: 4, maximum: 40, consolidating: false }],
+      started,
+    );
+    const frame =
+      render(
+        <ScanView plan={deep} state={running} startedAt={Date.now()} columns={90} />,
+      ).lastFrame() ?? "";
+    expect(frame).toContain("Reviewing the code…  3 of up to 40 reviews done, 4 running");
+    expect(frame).toContain("repository · deep");
+    expect(frame).not.toMatch(/Building the threat model|Reviewing files|Writing the report/u);
   });
 });
 

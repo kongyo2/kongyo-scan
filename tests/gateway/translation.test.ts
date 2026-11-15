@@ -9,7 +9,7 @@ import {
 import { ChatStreamTranslator } from "../../src/gateway/chat-stream.js";
 import { SseParser } from "../../src/gateway/sse.js";
 import { decodeReasoningTag, encodeReasoningTag } from "../../src/gateway/tags.js";
-import { flattenTools, ToolNames } from "../../src/gateway/tools.js";
+import { flattenTools, normalizeArguments, ToolNames } from "../../src/gateway/tools.js";
 import { chatChunk, provider } from "../helpers.js";
 
 const functionTool = (
@@ -120,6 +120,34 @@ describe("flattenTools", () => {
       kind: "function",
     });
     expect(flat).toMatch(/^[A-Za-z0-9_-]{1,64}$/u);
+  });
+});
+
+describe("normalizeArguments", () => {
+  it("writes whole numbers as integers, which is what Codex tools parse", () => {
+    expect(normalizeArguments('{"targets":["a"],"timeout_ms":300000.0}')).toBe(
+      '{"targets":["a"],"timeout_ms":300000}',
+    );
+    expect(
+      normalizeArguments('{"cmd":"ls","yield_time_ms": 5000.0, "max_output_tokens":3e4}'),
+    ).toBe('{"cmd":"ls","yield_time_ms": 5000, "max_output_tokens":30000}');
+    expect(normalizeArguments('{"a":[1.0,-2.00,0.0,-0.0,1.5e1],"b":{"c":100e-2}}')).toBe(
+      '{"a":[1,-2,0,0,15],"b":{"c":1}}',
+    );
+  });
+
+  it("leaves real fractions, huge numbers, and everything inside strings alone", () => {
+    for (const text of [
+      '{"score":7.5,"ratio":1e-3,"big":1e400,"wide":12345678901234567890.0}',
+      '{"cmd":"sleep 2.0 && echo v1.0 \\"3.0\\"","note":"1e3"}',
+      '{"limit":300000,"id":12345678901234567890}',
+      "{}",
+      "",
+      '{"cmd":"unterminated 1.0',
+    ]) {
+      expect(normalizeArguments(text)).toBe(text);
+    }
+    expect(normalizeArguments('{"path":"a\\\\","n":2.0}')).toBe('{"path":"a\\\\","n":2}');
   });
 });
 
@@ -565,6 +593,36 @@ describe("ChatStreamTranslator", () => {
       chatChunk({}, "stop"),
     ]);
     expect(translator.hasOutput).toBe(false);
+  });
+
+  it("hands Codex integer arguments when the model wrote them as floats", () => {
+    const { events, translator } = translate([
+      chatChunk({
+        tool_calls: [
+          {
+            index: 0,
+            id: "call-abcdef-123456",
+            function: { name: "exec_command", arguments: '{"value":"sleep 1.0",' },
+          },
+          {
+            index: 1,
+            id: "call-zzzzzz-999999",
+            function: { name: "apply_patch", arguments: '{"input":"+ratio = 2.0"}' },
+          },
+        ],
+      }),
+      chatChunk({ tool_calls: [{ index: 0, function: { arguments: '"yield_time_ms":5000.0}' } }] }),
+      chatChunk({}, "tool_calls"),
+    ]);
+    translator.complete();
+    const items = doneItems(events);
+    expect(items[0]).toMatchObject({
+      type: "function_call",
+      arguments: '{"value":"sleep 1.0","yield_time_ms":5000}',
+    });
+    expect(items[1]).toMatchObject({ type: "custom_tool_call", input: "+ratio = 2.0" });
+    const done = events.find((item) => item.event === "response.function_call_arguments.done")!;
+    expect(done.data["arguments"]).toBe(items[0]!["arguments"]);
   });
 });
 

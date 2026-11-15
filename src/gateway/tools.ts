@@ -177,6 +177,55 @@ export function argumentsToCustomInput(argumentsText: string): string {
   return argumentsText;
 }
 
+const JSON_NUMBER = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+const QUOTE = 34;
+const BACKSLASH = 92;
+const MINUS = 45;
+const ZERO = 48;
+const NINE = 57;
+
+/**
+ * Writes whole numbers in a tool call's JSON arguments without a fraction or exponent, so
+ * `300000.0` becomes `300000`. Some models write every `number` argument as a float, and Codex
+ * rejects a float where a tool takes an integer. Everything else stays as the model wrote it.
+ */
+export function normalizeArguments(argumentsText: string): string {
+  if (!/\d[.eE]/u.test(argumentsText)) return argumentsText;
+  let result = "";
+  let copied = 0;
+  let index = 0;
+  while (index < argumentsText.length) {
+    const code = argumentsText.charCodeAt(index);
+    if (code === QUOTE) {
+      index++;
+      while (index < argumentsText.length) {
+        const inner = argumentsText.charCodeAt(index);
+        index += inner === BACKSLASH ? 2 : 1;
+        if (inner === QUOTE) break;
+      }
+      continue;
+    }
+    if (code !== MINUS && (code < ZERO || code > NINE)) {
+      index++;
+      continue;
+    }
+    JSON_NUMBER.lastIndex = index;
+    const literal = JSON_NUMBER.exec(argumentsText)?.[0];
+    if (literal === undefined) {
+      index++;
+      continue;
+    }
+    const start = index;
+    index += literal.length;
+    if (!/[.eE]/u.test(literal)) continue;
+    const value = Number(literal);
+    if (!Number.isSafeInteger(value)) continue;
+    result += argumentsText.slice(copied, start) + String(value);
+    copied = index;
+  }
+  return copied === 0 ? argumentsText : result + argumentsText.slice(copied);
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

@@ -319,6 +319,8 @@ export function plainReporter(output: Output, verbose: boolean): (event: ScanEve
   const announced = new Set<string>();
   let stage: string | undefined;
   let lastReconnect = 0;
+  let reviews: number | undefined;
+  let consolidating = false;
   const ellipsis = output.err.glyph.ellipsis;
   return (event) => {
     switch (event.type) {
@@ -341,10 +343,16 @@ export function plainReporter(output: Output, verbose: boolean): (event: ScanEve
         );
         break;
       case "deep_progress":
-        if (event.consolidating && !announced.has("consolidating")) {
-          announced.add("consolidating");
-          output.info(`  Combining results${ellipsis}`);
+        // A deep scan reports reviews instead of phases, and combines results after each batch.
+        if (reviews === undefined) {
+          output.info(`  Reviewing the code${ellipsis} up to ${plural(event.maximum, "review")}`);
         }
+        if (event.completed !== (reviews ?? 0)) {
+          output.info(`  ${event.completed} of up to ${event.maximum} reviews done`);
+        }
+        reviews = event.completed;
+        if (event.consolidating && !consolidating) output.info(`  Combining results${ellipsis}`);
+        consolidating = event.consolidating;
         break;
       case "fallback":
         output.warn(

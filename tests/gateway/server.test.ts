@@ -247,6 +247,67 @@ describe("gateway", () => {
     });
   });
 
+  it("relays whole-number tool arguments as integers, however the endpoint wrote them", async () => {
+    const written = '{"targets":["agent-1"],"timeout_ms":300000.0}';
+    const call = {
+      type: "function_call",
+      id: "fc_1",
+      name: "spawn_agent",
+      arguments: written,
+      call_id: "call_1",
+    };
+    const responses = await upstream((_request, response) =>
+      sendSse(response, [
+        [
+          "response.function_call_arguments.done",
+          {
+            type: "response.function_call_arguments.done",
+            item_id: "fc_1",
+            output_index: 0,
+            arguments: written,
+          },
+        ],
+        [
+          "response.output_item.done",
+          { type: "response.output_item.done", output_index: 0, item: call },
+        ],
+        [
+          "response.completed",
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_1",
+              status: "completed",
+              output: [call],
+              usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
+            },
+          },
+        ],
+      ]),
+    );
+    const relayed = async (nativeResponses: boolean): Promise<unknown[]> => {
+      const instance = await gateway([
+        provider({
+          wireApi: "responses",
+          baseUrl: responses.baseUrl,
+          compat: { nativeResponses, images: true, omitParams: [], extraBody: {} },
+        }),
+      ]);
+      const events = parseSseText((await post(instance)).text);
+      const data = (name: string): Record<string, unknown> =>
+        events.find((item) => item.event === name)!.data;
+      return [
+        data("response.function_call_arguments.done")["arguments"],
+        (data("response.output_item.done")["item"] as Record<string, unknown>)["arguments"],
+        (data("response.completed")["response"] as { output: Record<string, unknown>[] })
+          .output[0]!["arguments"],
+      ];
+    };
+    const expected = '{"targets":["agent-1"],"timeout_ms":300000}';
+    expect(await relayed(false)).toEqual([expected, expected, expected]);
+    expect(await relayed(true)).toEqual([expected, expected, expected]);
+  });
+
   it("keeps OpenAI's native shape when asked, fixing namespaced call names and tagging reasoning", async () => {
     const responses = await upstream((_request, response) =>
       sendSse(response, [
